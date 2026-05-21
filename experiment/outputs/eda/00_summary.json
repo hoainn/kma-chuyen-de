@@ -1,0 +1,84 @@
+{
+  "collections": {
+    "attack": 12116,
+    "normal": 6850,
+    "baseline_total": 18966,
+    "attack_rate": 0.6388
+  },
+  "kernel_versions": {
+    "distinct": 26,
+    "top_3_share": 0.2697259821723341,
+    "gini_simpson_diversity": 0.9439337422850161
+  },
+  "bug_categories": {
+    "KASAN": 2954,
+    "WARNING": 2633,
+    "general_protection_fault": 1793,
+    "memory_leak": 1485,
+    "possible_deadlock": 823,
+    "BUG": 743,
+    "INFO": 712,
+    "KMSAN": 376,
+    "kernel_BUG": 213,
+    "other": 154,
+    "UBSAN": 106,
+    "inconsistent_lock_state": 73,
+    "divide_error": 51
+  },
+  "sequence_length": {
+    "attack": {
+      "count": 12116.0,
+      "mean": 1022001.8,
+      "std": 4665157.2,
+      "min": 1.0,
+      "25%": 31.0,
+      "50%": 45.0,
+      "75%": 8301.0,
+      "max": 100000000.0
+    },
+    "normal": {
+      "count": 6850.0,
+      "mean": 16051.8,
+      "std": 233082.3,
+      "min": 1.0,
+      "25%": 42.0,
+      "50%": 61.0,
+      "75%": 127.0,
+      "max": 14397021.0
+    }
+  },
+  "vocabulary": {
+    "attack_distinct": 1146,
+    "normal_distinct": 334,
+    "union_distinct": 1304,
+    "attack_only_count": 970,
+    "normal_only_count": 158
+  },
+  "most_discriminative_syscalls": {
+    "attack_leaning": [
+      "connect",
+      "sendto",
+      "clone",
+      "bind",
+      "mmap",
+      "exit_group",
+      "setsockopt",
+      "socket",
+      "wait4",
+      "close"
+    ],
+    "normal_leaning": [
+      "write",
+      "read",
+      "mprotect",
+      "rt_sigprocmask",
+      "newfstatat",
+      "openat",
+      "ioctl",
+      "fcntl",
+      "munmap",
+      "brk"
+    ]
+  },
+  "pca_explained_variance_2c": 0.13140562176704407
+}

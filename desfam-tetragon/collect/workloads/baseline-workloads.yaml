@@ -1,0 +1,140 @@
+# Three baseline workloads + their load generators.
+# All in namespace `baseline` so the recorder can filter cleanly.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: baseline
+---
+# nginx + wrk
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-server
+  namespace: baseline
+  labels: {app: nginx-server}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: nginx
+      image: nginx:1.27-alpine
+      ports: [{containerPort: 80}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-server
+  namespace: baseline
+spec:
+  selector: {app: nginx-server}
+  ports: [{port: 80, targetPort: 80}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-driver
+  namespace: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: wrk
+      image: skandyla/wrk:latest
+      command: ["sh", "-c"]
+      args:
+        - |
+          # Wait for service then loop wrk
+          until nc -z nginx-server 80; do sleep 1; done
+          for cycle in $(seq 1 6); do
+            wrk -t4 -c50 -d3m http://nginx-server/ || true
+            sleep 5
+          done
+---
+# Redis + benchmark
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redis-server
+  namespace: baseline
+  labels: {app: redis-server}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: redis
+      image: redis:7.4-alpine
+      ports: [{containerPort: 6379}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-server
+  namespace: baseline
+spec:
+  selector: {app: redis-server}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redis-driver
+  namespace: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: redis-benchmark
+      image: redis:7.4-alpine
+      command: ["sh", "-c"]
+      args:
+        - |
+          until redis-cli -h redis-server ping > /dev/null 2>&1; do sleep 1; done
+          for cycle in $(seq 1 4); do
+            redis-benchmark -h redis-server -t set,get,lpush,rpop -n 50000 -c 20 -q
+            sleep 5
+          done
+---
+# Postgres + pgbench
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pg-server
+  namespace: baseline
+  labels: {app: pg-server}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: postgres
+      image: postgres:16-alpine
+      env:
+        - {name: POSTGRES_PASSWORD, value: bench}
+        - {name: POSTGRES_DB, value: bench}
+      ports: [{containerPort: 5432}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-server
+  namespace: baseline
+spec:
+  selector: {app: pg-server}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pg-driver
+  namespace: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pgbench
+      image: postgres:16-alpine
+      env:
+        - {name: PGPASSWORD, value: bench}
+      command: ["sh", "-c"]
+      args:
+        - |
+          until pg_isready -h pg-server -U postgres > /dev/null 2>&1; do sleep 1; done
+          pgbench -h pg-server -U postgres -i -s 4 bench
+          for cycle in $(seq 1 3); do
+            pgbench -h pg-server -U postgres -c 8 -j 2 -T 180 bench
+            sleep 5
+          done

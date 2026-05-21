@@ -1,0 +1,178 @@
+\appendices
+\section{Bộ Phân Tích CVE Dựa Trên Quy Tắc để Trích Xuất Syscall}
+\label{appendix:cve_parser}
+
+\subsection{Phạm Vi và Nguyên Tắc Thiết Kế}
+\label{subsec:appendix_scope}
+
+Chúng tôi thiết kế một bộ phân tích tất định, dựa trên quy tắc (thay vì NLP dựa trên ML) để trích xuất
+các syscall có rủi ro cao từ mô tả CVE và khuyến cáo của nhà cung cấp, đảm bảo:
+
+\begin{itemize}
+  \item \textbf{Tính minh bạch:} Khớp mẫu hoàn toàn có thể kiểm tra và giải thích được.
+  \item \textbf{Độ chính xác:} Sử dụng từ điển syscall đặc thù của kernel để tránh kết quả dương tính giả.
+  \item \textbf{Nhận thức ngữ cảnh:} Lọc dựa trên điều kiện khai thác, phiên bản kernel,
+        kiến trúc, các quyền hạn và ràng buộc thiết bị.
+\end{itemize}
+
+Phương pháp dựa trên quy tắc được ưu tiên hơn NLP dựa trên ML vì nó cung cấp tính tất định cao hơn,
+không tạo ra kết quả dương tính giả từ suy luận mô hình, và cho phép kiểm tra đầy đủ từng
+quyết định lọc. Điều này đặc biệt quan trọng trong các ngữ cảnh bảo mật, nơi khả năng kiểm tra
+và giải thích là tối quan trọng.
+
+\subsection{Xây Dựng Từ Điển Syscall}
+\label{subsec:appendix_dictionary}
+
+Từ điển syscall được xây dựng trực tiếp từ mã nguồn kernel:
+
+\begin{lstlisting}[float=htbp, language=bash, caption={Trích xuất tên syscall từ mã nguồn kernel.}]
+# Generated from kernel v5.15 headers
+grep -r 'SYSCALL_DEFINE' arch/x86/kernel/ \
+    | awk -F'(' '{print $2}' \
+    | cut -d, -f1 \
+    | sort -u
+# --> [accept, access, acct, add_key, ...]
+\end{lstlisting}
+
+Nguồn tham khảo:
+\begin{itemize}
+  \item \texttt{/arch/x86/entry/syscalls/syscall\_64.tbl}
+  \item \texttt{/include/linux/syscalls.h}
+  \item Linux man-pages Phần~II
+\end{itemize}
+
+Điều này đảm bảo rằng chỉ các syscall hợp lệ trong kernel mới là ứng viên để trích xuất và phân tích. Từ
+điển kết quả chứa tên chuẩn của 335~syscall được hỗ trợ bởi Linux kernel~6.x,
+cùng với các bí danh thông dụng (ví dụ: \texttt{getpid} và \texttt{sys\_getpid}).
+
+\subsection{Quy Tắc Trích Xuất và Lọc}
+\label{subsec:appendix_extraction_rules}
+
+Các mẫu regex được áp dụng cho mô tả CVE, khuyến cáo của nhà cung cấp và các
+tiết lộ trên danh sách gửi thư bảo mật để xác định các đề cập syscall và lọc dựa trên ngữ cảnh.
+
+\textbf{Các mẫu regex chính:}
+
+\begin{lstlisting}[float=htbp, language=Python, caption={Các mẫu regex để xác định đề cập syscall trong mô tả CVE.}]
+# Pattern 1: Direct syscall mention (e.g., "via the ptrace() syscall")
+SYSCALL_DIRECT = re.compile(
+    r'\b(?:the\s+)?'
+    r'(?P<syscall>' + '|'.join(SYSCALL_DICT) + r')'
+    r'(?:\(\d*\))?\s*(?:system\s+call|syscall)',
+    re.IGNORECASE
+)
+
+# Pattern 2: Function name in exploit context
+SYSCALL_EXPLOIT = re.compile(
+    r'(?:exploit|abuse|invoke|call|use)\s+'
+    r'(?:the\s+)?'
+    r'(?P<syscall>' + '|'.join(SYSCALL_DICT) + r')'
+    r'(?:\(\d*\))?',
+    re.IGNORECASE
+)
+
+# Pattern 3: C annotation pattern (e.g., "setuid(0)" or "execve('/bin/sh', ...)")
+SYSCALL_CODE = re.compile(
+    r'\b(?P<syscall>' + '|'.join(SYSCALL_DICT) + r')'
+    r'\s*\([^)]*\)',
+    re.IGNORECASE
+)
+\end{lstlisting}
+
+\textbf{Quy tắc lọc theo ngữ cảnh:}
+
+Sau khi trích xuất các syscall ứng viên, bộ phân tích lọc chúng dựa trên:
+\begin{enumerate}
+  \item \textit{Khả năng áp dụng theo phiên bản kernel:} Dải phiên bản được trích xuất từ các mẫu như
+        ``kernel versions prior to 5.12'' và so sánh với phiên bản kernel của máy chủ.
+  \item \textit{Kiến trúc:} Các đề cập như ``x86\_64 only'' hoặc ``ARM-specific'' được khớp và
+        các kiến trúc không phù hợp bị loại trừ.
+  \item \textit{Yêu cầu quyền hạn:} Các CVE yêu cầu \texttt{CAP\_SYS\_ADMIN} hoặc các
+        quyền hạn nâng cao khác bị loại trừ nếu container không có quyền hạn đó.
+  \item \textit{Ràng buộc thiết bị:} Các khai thác yêu cầu phần cứng cụ thể (ví dụ:
+        \texttt{/dev/kvm}, các thiết bị USB cụ thể) bị loại trừ nếu thiết bị không có sẵn.
+\end{enumerate}
+
+\subsection{Mã Giả Thuật Toán}
+\label{subsec:appendix_pseudocode}
+
+\begin{lstlisting}[float=htbp, language=Python, caption={Bộ phân tích CVE dựa trên quy tắc: thuật toán trích xuất syscall.}]
+import re
+
+def extract_high_risk_syscalls(cves, host_kernel, host_arch):
+    """
+    Extract the set of high-risk syscalls from CVE descriptions.
+
+    Parameters:
+        cves: List of CVE objects with a .desc field
+        host_kernel: Host kernel version (tuple, e.g., (6, 8, 0))
+        host_arch: Host architecture (str, e.g., "x86_64")
+
+    Returns:
+        S_blocked: Set of syscall names to block
+    """
+    S_blocked = set()
+
+    for cve in cves:
+        # Filter 1: Check kernel version applicability
+        if not kernel_version_applicable(cve.desc, host_kernel):
+            continue
+
+        # Filter 2: Skip if architecture does not match
+        if architecture_mismatch(cve.desc, host_arch):
+            continue
+
+        # Extract syscall mentions via regex
+        found_syscalls = re.findall(syscall_regex, cve.desc)
+
+        for syscall in found_syscalls:
+            # Filter 3: Skip if special capability required
+            #           but container does not have it
+            if requires_special_cap(cve.desc) and \
+               not container_has_cap():
+                continue
+
+            # Filter 4: Skip if specific device required
+            #           but not available
+            if needs_specific_device(cve.desc) and \
+               not device_available():
+                continue
+
+            # Syscall passed all filters -> add to blocked set
+            S_blocked.add(syscall)
+
+    return S_blocked
+\end{lstlisting}
+
+\subsection{Ví Dụ Lọc Thực Tế}
+\label{subsec:appendix_examples}
+
+\textbf{Ví dụ~1: CVE-2022-0185~\cite{cve_2022_0185} (Linux Kernel --- Tràn bộ đệm fsconfig)}
+\begin{itemize}
+  \item \textit{Mô tả CVE:} ``A heap-based buffer overflow was found in the Linux kernel's
+        legacy\_parse\_param function in the Filesystem Context functionality\ldots allows a
+        local user with CAP\_SYS\_ADMIN to escalate privileges\ldots''
+  \item \textit{Syscall Trích Xuất:} \texttt{ioctl}, \texttt{mount}
+  \item \textit{Quyết Định Lọc:} Yêu cầu \texttt{CAP\_SYS\_ADMIN} $\Rightarrow$ giữ lại trong
+        $S_{\text{blocked}}$ nếu container có quyền hạn đó; loại bỏ trong trường hợp ngược lại.
+  \item \textit{Kết Quả:} Đối với các container không có đặc quyền, CVE này bị lọc ra. Đối với các container
+        có \texttt{CAP\_SYS\_ADMIN}, \texttt{mount} được thêm vào $S_{\text{blocked}}$.
+\end{itemize}
+
+\textbf{Ví dụ~2: CVE-2021-22555~\cite{cve_2021_22555} (NetFilter --- tràn bộ đệm heap)}
+\begin{itemize}
+  \item \textit{Mô tả CVE:} ``A heap out-of-bounds write affecting Linux since
+        v2.6.19-rc1 was discovered in net/netfilter/x\_tables.c\ldots can be exploited with
+        setsockopt() to achieve local privilege escalation.''
+  \item \textit{Syscall Trích Xuất:} \texttt{setsockopt}
+  \item \textit{Điều Kiện Phiên Bản:} Ảnh hưởng đến kernel $< 5.12$; bị loại bỏ nếu kernel máy chủ là
+        5.15+.
+  \item \textit{Quyết Định Lọc:} Nếu kernel máy chủ là 5.15, CVE này bị bỏ qua và
+        \texttt{setsockopt} \textit{không} được thêm vào $S_{\text{blocked}}$, tránh việc chặn không cần thiết
+        các chức năng mạng hợp lệ.
+\end{itemize}
+
+Hai ví dụ này minh họa cách bộ phân tích CVE nhận thức ngữ cảnh tránh được cả kết quả dương tính giả
+(chặn các syscall an toàn trong một số môi trường) và kết quả âm tính giả (bỏ sót các syscall nguy hiểm
+khi áp dụng). Phương pháp tất định này đảm bảo rằng $S_{\text{blocked}}$ phản ánh chính xác
+bề mặt tấn công CVE thực sự của mỗi môi trường container được triển khai.

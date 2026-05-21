@@ -1,0 +1,69 @@
+# DeSFAM Detector — consumes Tetragon's gRPC event stream and scores
+# rolling syscall windows with the trained IF + VAE ensemble.
+#
+# Replace <REGISTRY>/<IMAGE>:<TAG> below with your pushed image.
+# Replace TARGET_NAMESPACE with the namespace you want to monitor.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: desfam
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: desfam-detector
+  namespace: desfam
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: desfam-detector
+  namespace: desfam
+  labels:
+    app: desfam-detector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: desfam-detector
+  template:
+    metadata:
+      labels:
+        app: desfam-detector
+    spec:
+      serviceAccountName: desfam-detector
+      containers:
+        - name: detector
+          image: desfam-detector:local-v2                # docker-desktop local build (v2)
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--tetragon-addr=tetragon-grpc.kube-system.svc.cluster.local:54321"
+            - "--namespace=demo"
+            - "--window=200"
+            - "--step=50"
+            - "--kernel-ver=6.12"
+            - "--model-variant=vae_container"            # best on production-like baseline
+            - "--threshold=0.5"                          # post-normalisation cut, see report
+            - "--scores-only"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1500Mi"
+          # No host privileges needed — events come via gRPC.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

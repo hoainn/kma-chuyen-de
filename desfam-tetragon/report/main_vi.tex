@@ -1,0 +1,71 @@
+\documentclass[journal,10pt,twoside]{IEEEtran}
+
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+
+\usepackage[vietnamese]{babel}
+
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,multirow,array,tabularx}
+\usepackage{placeins}
+\usepackage{graphicx}
+\usepackage{listings,xcolor}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cite}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  showstringspaces=false,
+  frame=single,
+  framesep=4pt,
+  xleftmargin=4pt,
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\begin{document}
+
+\title{Tái Hiện DeSFAM và Triển Khai Trên Cụm Kubernetes Trực Tiếp với Cilium Tetragon}
+
+\author{Minh \\ KMA --- Báo Cáo Chuyên Đề (2025--2026)
+\thanks{Tái hiện bài báo: S.~Zehra và cộng sự,
+``DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud
+Containers in Real Time,'' \textit{IEEE Access}, tập~13, 2025,
+DOI:~10.1109/ACCESS.2025.3592192.}}
+
+\maketitle
+
+\begin{abstract}
+Chúng tôi trình bày một nghiên cứu tái hiện và triển khai độc lập của
+SyscallAD, bộ phát hiện bất thường syscall ở trung tâm của framework
+DeSFAM. Trên bộ dữ liệu DongTing, kết quả công bố $F_{1}=0{,}92$ được
+tái hiện trong khoảng nhiễu lấy mẫu ($F_{1}=0{,}932$ với tập hợp
+VAE+iForest, $F_{1}=0{,}963$ với VAE đơn lẻ) sau khi thay một bước
+chuẩn hoá không được nêu trong pipeline tham chiếu bằng một bộ scaler
+dải lượng phân vị nguyên tắc. Ngoài việc tái hiện, chúng tôi thu một
+bộ dữ liệu syscall có nhãn với $\approx\!16$k sự kiện trực tiếp từ
+luồng gRPC của Cilium Tetragon trên ba khối công việc container kiểu
+sản xuất, triển khai bộ phát hiện đã huấn luyện như một tiến trình
+tiêu thụ gRPC trong-cụm, và đánh giá sáu biến thể mô hình trên ba tập
+kiểm tra. Hai giới hạn cấu trúc của pipeline công bố được phơi bày.
+Thứ nhất, VAE huấn luyện trên DongTing tổng quát hoá kém với lưu
+lượng syscall container thật ($\text{AUC}=0{,}135$, thấp hơn ngẫu
+nhiên về thống kê), và huấn luyện lại cùng kiến trúc trên dữ liệu
+Container khôi phục $\text{AUC}=1{,}0$. Thứ hai, thành phần iForest
+của tập hợp đóng góp tín hiệu phân biệt không đáng kể dưới cả hai
+phân phối huấn luyện, trong khi các baseline có-giám-sát (LSTM,
+1-D~CNN) trên cùng không gian đặc trưng cạnh tranh được. Độ trễ chấm
+điểm theo cửa sổ là $9$--$18$~ms trên một lõi CPU đơn, chủ yếu do xây
+dựng đặc trưng. Chúng tôi đưa ra khuyến nghị cụ thể cho việc hiệu
+chỉnh ngưỡng trong-môi-trường và trọng số tập hợp tại thời điểm triển
+khai.
+\end{abstract}
+
+\input{experience_vi}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

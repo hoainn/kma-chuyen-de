@@ -1,0 +1,377 @@
+\section{Đánh Giá Thực Nghiệm và Kết Quả}
+\label{sec:evaluation}
+
+Phần này đánh giá framework DeSFAM về độ chính xác thực thi ở cấp độ syscall,
+chi phí hiệu năng, tỷ lệ giảm thiểu, và khả năng mở rộng trong môi trường container hóa.
+Các thực nghiệm được tiến hành với các khối lượng công việc thực tế và các kịch bản tấn công
+để đánh giá hiệu quả và hiệu năng thời gian chạy của DeSFAM. Các chỉ số được so sánh với các
+framework dẫn đầu trong điều kiện được kiểm soát nhằm đảm bảo tính công bằng và khả năng tái
+lập. Kết quả làm nổi bật tác động bảo mật và tính khả thi vận hành của DeSFAM trong các triển
+khai thực tế.
+
+\subsection{Thiết Lập Thực Nghiệm}
+\label{subsec:experimental_setup}
+
+\subsubsection{Hạ Tầng}
+\label{subsubsec:infrastructure}
+
+Các thực nghiệm được tiến hành trên một máy chủ bare-metal hiệu năng cao chạy Ubuntu~24.04~LTS,
+được trang bị CPU 16 nhân, 64~GB RAM, GPU NVIDIA A100 80~GB, và SSD NVMe 512~GB. Docker
+26.0 với containerd~1.7 được sử dụng để quản lý vòng đời container. Môi trường eBPF được
+cấu hình với libbpf~1.3 và bpftrace~0.21. Quá trình huấn luyện mô hình được thực hiện bằng
+PyTorch~2.3 với tăng tốc CUDA.
+
+\subsubsection{Khối Lượng Công Việc Container}
+\label{subsubsec:container_workloads}
+
+Chúng tôi đánh giá DeSFAM trên sáu container đa dạng: Nginx (máy chủ web), MySQL~8.0 (cơ sở
+dữ liệu quan hệ), Redis~7.2 (kho lưu trữ khóa-giá trị), Node.js~20 (runtime JavaScript),
+Python~3.12 (xử lý script), và MongoDB~7.0 (cơ sở dữ liệu tài liệu)---bao gồm phục vụ web,
+lưu trữ dữ liệu, và thực thi script với các hồ sơ syscall khác nhau đáng kể.
+
+\subsubsection{Sinh Khối Lượng Công Việc}
+\label{subsubsec:workload_generation}
+
+Lưu lượng thực tế được sinh ra bằng các công cụ tiêu chuẩn công nghiệp: \texttt{wrk} và ApacheBench
+(\texttt{ab}) cho tải HTTP trên Nginx; \texttt{redis-benchmark} cho Redis; và các script Python
+tùy chỉnh để mô phỏng các thao tác CRUD cho MySQL và MongoDB. Mỗi khối lượng công việc được chạy
+ở ba mức tải: nhàn rỗi, tải trung bình (50\% công suất), và tải đỉnh (90\% công suất), trong
+các khoảng thời gian 10 phút.
+
+\subsubsection{Mô Phỏng Tấn Công}
+\label{subsubsec:attack_simulation}
+
+Ba loại kịch bản tấn công CVE thực tế được sử dụng:
+\begin{itemize}
+  \item \textbf{CVE-2021-4034 (Polkit pkexec)~\cite{cve_2021_4034}:} Khai thác leo thang đặc
+        quyền cục bộ thông qua một chuỗi \texttt{execve} được tạo thủ công.
+  \item \textbf{CVE-2022-0847 (Dirty Pipe)~\cite{cve_2022_0847}:} Khai thác ghi đè bộ nhớ kernel
+        thông qua \texttt{splice} và \texttt{pipe}.
+  \item \textbf{CVE-2017-5123 (waitid exploit):} Leo thang đặc quyền kernel thông qua \texttt{waitid}
+        với con trỏ không hợp lệ.
+\end{itemize}
+
+Tổng cộng 14 kịch bản tấn công CVE riêng biệt đã được thực thi trên tất cả các khối lượng công
+việc container.
+
+\subsubsection{So Sánh Với Các Hệ Thống Cơ Sở}
+\label{subsubsec:baselines}
+
+DeSFAM được đánh giá chuẩn so với năm hệ thống cơ sở: Confine~\cite{ref31_confine},
+Prof-gen~\cite{ref36_profgen}, NIMOS~\cite{ref38_nimos}, Optimus~\cite{ref27_optimus}, và
+KubeRosy~\cite{ref29_kuberosy}. Mỗi hệ thống cơ sở được triển khai lại theo cấu hình gốc của
+nó và tích hợp với Docker/Kubernetes để đảm bảo tương đồng trong khả năng thực thi thời gian
+chạy và lập hồ sơ syscall.
+
+\subsection{Các Chỉ Số Đánh Giá}
+\label{subsec:metrics}
+
+\subsubsection{Tỷ Lệ Giảm Thiểu Syscall (SRR)}
+SRR định lượng khả năng của DeSFAM trong việc giảm thiểu phơi nhiễm kernel bằng cách tối thiểu
+hóa các syscall được phép:
+\begin{equation}
+  \text{SRR} = \left(1 - \frac{|\text{DeSFAM Access List}|}{|\text{Docker Default Access List}|}\right) \times 100\%
+  \label{eq:srr}
+\end{equation}
+
+Mặc định của Docker cho phép 414 syscall. Việc lập hồ sơ lai của DeSFAM (tĩnh, động,
+có thông tin CVE) tạo ra các danh sách truy cập riêng cho từng container, đạt SRR cao hơn so với
+các phương pháp chỉ dùng tĩnh hoặc chỉ dùng động.
+
+\subsubsection{Hiệu Năng Phát Hiện Bất Thường}
+Chúng tôi đánh giá độ chính xác của SyscallAD bằng:
+\begin{itemize}
+  \item Recall (TPR) -- Tỷ lệ các cuộc tấn công được nhận diện đúng
+  \item Precision -- Tỷ lệ các chuỗi được gắn cờ thực sự là mối đe dọa
+  \item F1-Score, AUC, và Average Precision (AP) -- Độ bền trong dữ liệu mất cân bằng
+\end{itemize}
+Tập hợp VAE + iForest của DeSFAM vượt trội hơn phát hiện chỉ dùng LSTM (ví dụ: NIMOS), với
+độ chính xác được cải thiện và giảm dương tính giả.
+
+\subsubsection{Độ Trễ Phát Hiện Tấn Công}
+Thời gian (tính bằng $\mu$s) giữa lúc thực thi syscall độc hại và thực thi ngăn chặn. Các hook
+eBPF-LSM của DeSFAM hỗ trợ chặn nội tuyến với độ trễ dưới mili giây. So với Optimus và
+KubeRosy, vốn dựa trên các thành phần không gian người dùng, DeSFAM phản ứng nhanh hơn nhờ
+thiết kế ở cấp độ kernel.
+
+\subsubsection{Chi Phí Thực Thi}
+Chúng tôi đánh giá mức sử dụng CPU trung bình (\%), mức tiêu thụ bộ nhớ (MB), và độ trễ xử lý
+syscall ($\mu$s).
+
+\subsubsection{Các Chỉ Số Khả Năng Thích Ứng và So Sánh}
+Để đánh giá khả năng thích ứng chính sách động, chúng tôi đo lường:
+\begin{itemize}
+  \item Độ trễ cập nhật quy tắc qua SyscallAD hoặc các kích hoạt CVE (tính bằng $\mu$s)
+  \item Tác động đến thời gian hoạt động (không quan sát thấy thời gian ngừng hoạt động)
+\end{itemize}
+Không có hệ thống cơ sở nào---Confine, Prof-gen, NIMOS, Optimus, hoặc KubeRosy---hỗ trợ
+tự tăng cứng chính sách thời gian thực. Để so sánh toàn diện, chúng tôi đánh giá: kích thước
+danh sách truy cập và SRR, tỷ lệ thành công giảm thiểu tấn công, thực thi không lỗi cho các
+khối lượng công việc lành tính, và FPR trung bình cùng độ trễ thực thi.
+
+\subsection{Kết Quả So Sánh}
+\label{subsec:comparative_results}
+
+Chúng tôi so sánh DeSFAM với năm framework lọc syscall hiện đại nhất---Confine,
+Prof-gen, NIMOS, Optimus, và KubeRosy---sử dụng các chỉ số như tỷ lệ giảm thiểu syscall (SRR),
+tính ổn định thực thi, ngăn chặn tấn công, và hiệu năng thời gian chạy. Đánh giá bao gồm sáu
+khối lượng công việc container đa dạng: Nginx, MySQL, Redis, Node.js, Python, và MongoDB.
+
+\subsubsection{So Sánh Tỷ Lệ Giảm Thiểu Syscall (SRR)}
+
+Mục tiêu chính của DeSFAM là tối thiểu hóa bề mặt tấn công kernel bằng cách giảm các syscall
+được phơi nhiễm. Hồ sơ seccomp mặc định của Docker cho phép 414 syscall, nhiều trong số đó là
+không cần thiết và có thể bị khai thác. DeSFAM sử dụng giảm thiểu lai---phân tích tĩnh, lập
+hồ sơ động, và lọc có thông tin CVE---để tạo ra các danh sách truy cập riêng cho từng container.
+SRR được tính như sau:
+\begin{equation}
+  \text{SRR} = \left(1 - \frac{\text{Access List Size}}{414}\right) \times 100\%
+  \label{eq:srr_comparative}
+\end{equation}
+
+Hình~\ref{fig:srr_bar} và Hình~\ref{fig:srr_rate} minh họa sự cải thiện trên tất cả các container
+thử nghiệm. Bảng~\ref{tab:srr} tóm tắt kết quả theo từng framework.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure9}
+  \caption{So Sánh Kích Thước Danh Sách Truy Cập Syscall và Tỷ Lệ Giảm Thiểu.}
+  \label{fig:srr_bar}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure10}
+  \caption{So sánh tỷ lệ giảm thiểu syscall giữa các framework.}
+  \label{fig:srr_rate}
+\end{figure}
+
+\begin{table*}[tp]
+  \centering
+  \caption{So Sánh Tỷ Lệ Giảm Thiểu Syscall (SRR).}
+  \label{tab:srr}
+  \includegraphics[width=\linewidth]{table4}
+\end{table*}
+
+DeSFAM đạt SRR trung bình 78,60\%---cao nhất trong tất cả các framework---trong khi vẫn bảo
+toàn đầy đủ chức năng container. Kích thước danh sách truy cập trung bình là 89 syscall, nhỏ
+nhất trong tất cả các hệ thống được so sánh.
+
+\subsubsection{Tính Ổn Định Chức Năng}
+Cả sáu container mục tiêu duy trì tính khả dụng 100\% trong suốt tất cả các khối lượng công
+việc thử nghiệm. Không quan sát thấy hồi quy chức năng nào, xác nhận rằng tổng hợp danh sách
+truy cập của DeSFAM cân bằng bảo mật và khả năng tương thích tốt hơn so với các bộ tạo danh
+sách truy cập chỉ dùng tĩnh hoặc dựa trên nhật ký.
+
+\subsubsection{Ngăn Chặn Tấn Công}
+
+Khả năng chặn thời gian chạy của DeSFAM được đánh giá dựa trên một tập hợp các CVE thực tế
+đại diện cho các lỗ hổng kernel Linux đa dạng. Các CVE này bao gồm nhiều loại tấn công, bao
+gồm leo thang đặc quyền, thoát container, lạm dụng namespace, điều kiện đua, và khai thác
+làm hỏng bộ nhớ. Để đảm bảo an toàn và khả năng tái lập, các hành vi khai thác được mô phỏng
+bằng cách phát lại các chuỗi gọi syscall được ghi lại liên quan đến từng CVE, dựa trên các
+thông tin công khai và phân tích bằng chứng khái niệm.
+
+Bảng~\ref{tab:cve_blocking} tóm tắt tỷ lệ thành công chặn trên tất cả các framework. DeSFAM
+đã chặn thành công tất cả các kịch bản tấn công trong thời gian thực bằng cách sử dụng phát
+hiện bất thường chuỗi SyscallAD và thực thi cấp độ kernel eBPF-LSM. Ngược lại, các framework
+cơ sở hoặc không phát hiện được các tấn công này hoặc thiếu khả năng thực thi đầy đủ.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Tỷ Lệ Thành Công Chặn Tấn Công CVE.}
+  \label{tab:cve_blocking}
+  \includegraphics[width=\linewidth]{table5}
+\end{table*}
+
+\subsubsection{Các Chỉ Số So Sánh Hệ Thống Cơ Sở}
+
+\begin{table*}[tp]
+  \centering
+  \caption{So Sánh Các Chỉ Số Bảo Mật và Hiệu Năng với Hệ Thống Cơ Sở.}
+  \label{tab:baseline_comparison}
+  \includegraphics[width=\linewidth]{table6}
+\end{table*}
+
+DeSFAM đạt kích thước danh sách truy cập nhỏ nhất (89~syscall), ngăn chặn CVE đầy đủ (94\%
+dấu vết CVE bị chặn), tính ổn định lành tính cao (99\%), FPR thấp nhất (1,6\%), và độ trễ
+thực thi nhanh nhất (0,540~$\mu$s).
+
+\subsection{Hiệu Năng Thời Gian Chạy}
+\label{subsec:runtime_performance}
+
+\subsubsection{Chi Phí CPU và Bộ Nhớ}
+
+Chúng tôi đánh giá mức sử dụng tài nguyên trên sáu container đại diện có và không có DeSFAM.
+Như được hiển thị trong Hình~\ref{fig:cpu_overhead} và Hình~\ref{fig:mem_overhead}, DeSFAM chỉ
+tăng thêm 1,74\% mức sử dụng CPU trung bình và giảm mức tiêu thụ bộ nhớ 6,1\%, chủ yếu do
+các đường dẫn syscall bị chặn và giảm thiểu tình trạng phình to bộ nhớ do khai thác gây ra.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure11}
+  \caption{Mức sử dụng CPU có và không có DeSFAM. DeSFAM chỉ tạo ra chi phí CPU tối thiểu
+           ($\approx$1,74\%) trong khi thực thi các chính sách syscall thời gian thực.}
+  \label{fig:cpu_overhead}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure12}
+  \caption{Mức sử dụng bộ nhớ có và không có DeSFAM. Tiết kiệm bộ nhớ nhẹ ($\approx$6,1\%)
+           là kết quả từ việc ngăn chặn syscall và giảm thiểu khai thác.}
+  \label{fig:mem_overhead}
+\end{figure}
+
+\begin{table*}[tp]
+  \centering
+  \caption{Mức Sử Dụng CPU và Bộ Nhớ Có và Không Có DeSFAM.}
+  \label{tab:cpu_memory}
+  \includegraphics[width=\linewidth]{table7}
+\end{table*}
+
+Bảng~\ref{tab:overhead_summary} tóm tắt chi phí hiệu năng tổng hợp, xác nhận dấu chân hiệu
+năng nhẹ của DeSFAM với mức tiết kiệm bộ nhớ trung bình 50--55~MB.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Tóm Tắt Chi Phí Hiệu Năng.}
+  \label{tab:overhead_summary}
+  \includegraphics[width=\linewidth]{table8}
+\end{table*}
+
+\subsubsection{Độ Trễ Cập Nhật Chính Sách}
+Để xác nhận khả năng phản hồi của thực thi thích ứng của DeSFAM, chúng tôi đo lường thời gian
+chèn và lan truyền quy tắc trong Giai đoạn~3. Khi phát hiện bất thường, các quy tắc mới được
+chèn vào eBPF map và áp dụng theo thời gian thực. Độ trễ được đo bằng dấu thời gian kernel
+độ phân giải cao tại cả hai giai đoạn chèn và lan truyền.
+
+Hình~\ref{fig:policy_latency} trình bày độ trễ chèn và lan truyền quy tắc được đo trên sáu
+container đang hoạt động. Bảng~\ref{tab:policy_latency} liệt kê các giá trị theo từng container.
+Các giá trị được thu thập bằng dấu thời gian kernel độ phân giải cao trước và sau khi cập nhật
+BPF map và lan truyền hook LSM. Tất cả các giá trị vẫn nhất quán ở mức thấp (65--82~$\mu$s),
+xác nhận khả năng thời gian thực của engine thực thi trong kernel của DeSFAM. Tất cả các cập
+nhật hoàn thành trong vòng 100~$\mu$s mà không làm gián đoạn dịch vụ, chứng minh khả năng
+thích ứng chính sách syscall thời gian thực, không gián đoạn hoạt động của DeSFAM.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure13}
+  \caption{Độ trễ cập nhật chính sách Giai đoạn~3 của DeSFAM. Tất cả quy tắc được chèn và
+           thực thi trong vòng 100~$\mu$s mà không làm gián đoạn container.}
+  \label{fig:policy_latency}
+\end{figure}
+
+\begin{table*}[tp]
+  \centering
+  \caption{Độ Trễ Cập Nhật và Lan Truyền Chính Sách.}
+  \label{tab:policy_latency}
+  \includegraphics[width=\linewidth]{table9}
+\end{table*}
+
+\subsubsection{Chi Phí Độ Trễ Syscall}
+
+Chúng tôi lập hồ sơ độ trễ syscall bằng cách sử dụng histogram \texttt{bpftrace} cho các thao
+tác thường xuyên như \texttt{read}, \texttt{write}, và \texttt{epoll\_wait}. Trên tất cả các
+container, DeSFAM duy trì độ trễ syscall dưới mili giây, xác nhận tính phù hợp của nó cho các
+môi trường thông lượng cao.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Chi Phí Độ Trễ Syscall (ns) cho Các Thao Tác Thông Thường.}
+  \label{tab:syscall_latency}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Syscall} & \textbf{Không có DeSFAM} & \textbf{Có DeSFAM} & \textbf{Delta} \\
+    \midrule
+    \texttt{read}       & 142\,ns & 218\,ns & +76\,ns \\
+    \texttt{write}      & 156\,ns & 234\,ns & +78\,ns \\
+    \texttt{epoll\_wait} & 89\,ns  & 148\,ns & +59\,ns \\
+    \texttt{accept4}    & 201\,ns & 287\,ns & +86\,ns \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Bảng~\ref{tab:syscall_counts} tóm tắt các syscall có tần suất cao nhất trên mỗi container
+hoàn thành trong khoảng 512--1000~$\mu$s. Hình~\ref{fig:syscall_latency_dist} trực quan hóa
+số lượng tổng hợp theo từng container trong phạm vi dưới mili giây này. Các kết quả này chứng
+minh khả năng của DeSFAM trong việc duy trì nhất quán độ trễ syscall thấp, ngay cả đối với các
+thao tác thường xuyên như \texttt{read}, \texttt{write}, và \texttt{epoll\_wait} mà không gây
+ra độ trễ đo được.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Số Lượng Syscall trong Phạm Vi Độ Trễ 512--1000\,$\mu$s.}
+  \label{tab:syscall_counts}
+  \includegraphics[width=\linewidth]{table10}
+\end{table*}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure14}
+  \caption{Phân phối độ trễ syscall trong phạm vi 512--1000~$\mu$s. Tất cả các đường dẫn syscall
+           vẫn hoạt động hiệu quả dưới DeSFAM.}
+  \label{fig:syscall_latency_dist}
+\end{figure}
+
+DeSFAM duy trì độ trễ syscall dưới mili giây cho tất cả các thao tác được đo, với delta tối
+đa 86~ns cho \texttt{accept4}. Tất cả các giá trị vẫn thấp hơn nhiều so với mục tiêu thiết
+kế 300~ns.
+
+\subsubsection{Hiệu Năng Phát Hiện Bất Thường}
+
+Mô hình SyscallAD của DeSFAM đạt được các chỉ số phân loại mạnh. Bộ phân loại tập hợp đạt
+độ chính xác tổng thể 96\%, với F1-score là 0,92 trên các chuỗi tấn công. Hình~\ref{fig:roc_pr}
+hiển thị các đường cong ROC và PR, với AUC là 0,94 và AP là 0,87.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure15}
+  \caption{Hiệu năng mô hình SyscallAD. Trái: Đường cong Precision-Recall (AP~= 0,87). Phải:
+           Đường cong ROC (AUC~= 0,94).}
+  \label{fig:roc_pr}
+\end{figure}
+
+\begin{table*}[tp]
+  \centering
+  \caption{Các Chỉ Số Phân Loại SyscallAD.}
+  \label{tab:detection_performance}
+  \includegraphics[width=\linewidth]{table11}
+\end{table*}
+
+SyscallAD đạt độ chính xác tổng thể 96\%, F1-score là 0,92, và AUC là 0,94 trên tập dữ liệu
+DongTing. Điều này thể hiện sự cải thiện đáng kể so với các phương pháp chỉ dùng VAE (F1~= 0,84)
+hoặc chỉ dùng iForest (F1~= 0,79), xác nhận lợi ích của chiến lược hợp nhất tập hợp.
+
+\subsubsection{So Sánh Tính Năng với Các Phương Pháp Hiện Có}
+DeSFAM tích hợp độc đáo phát hiện bất thường thời gian thực, thực thi chính sách thích ứng,
+và tối thiểu hóa syscall trong một framework thống nhất. Bảng~\ref{tab:feature_comparison} nêu
+bật ưu điểm của nó so với các framework hiện có trên 12~chiều kỹ thuật.
+
+\begin{table*}[tp]
+  \centering
+  \caption{So Sánh Tính Năng với Các Framework Hiện Có.}
+  \label{tab:feature_comparison}
+  \includegraphics[width=\linewidth]{table12}
+\end{table*}
+
+\subsection{Nghiên Cứu Loại Bỏ: Đóng Góp Theo Từng Giai Đoạn}
+\label{subsec:ablation}
+
+Để hiểu tác động của từng giai đoạn trong DeSFAM, chúng tôi tiến hành nghiên cứu loại bỏ vô
+hiệu hóa từng thành phần một. Như được hiển thị trong Bảng~\ref{tab:ablation}, Giai đoạn~1
+đơn lẻ đạt tỷ lệ giảm thiểu syscall 62,4\% nhưng chỉ chặn được 3 trong số 14 CVE. Việc thêm
+Giai đoạn~2 (SyscallAD) tăng cường phát hiện bất thường, nâng số lượng bị chặn lên 8 và giảm
+đáng kể dương tính giả. Giai đoạn~3 cung cấp thực thi cấp độ kernel, chặn 10 CVE ngay cả khi
+không có hỗ trợ ML. Khi cả ba giai đoạn đều hoạt động, DeSFAM chặn tất cả 14 CVE và đạt tỷ
+lệ giảm thiểu syscall 81,6\%.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Nghiên Cứu Loại Bỏ: Hiệu Ứng Theo Từng Giai Đoạn đối với Bảo Mật.}
+  \label{tab:ablation}
+  \includegraphics[width=\linewidth]{table13}
+\end{table}
+
+Nghiên cứu này xác nhận rằng tất cả các giai đoạn đều thiết yếu: Giai đoạn~1 tối thiểu hóa
+phơi nhiễm, Giai đoạn~2 tăng cường phát hiện, và Giai đoạn~3 đảm bảo thực thi bền vững.

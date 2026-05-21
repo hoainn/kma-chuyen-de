@@ -1,0 +1,10 @@
+{
+  "pod_key": "attack/revshell",
+  "namespace": "attack",
+  "label": "attack",
+  "session_id": "20260520T000409",
+  "first_seen_unix": 1779210277.677145,
+  "total_syscalls": 443,
+  "kernel_ver_hint": "6.12",
+  "recorded_at": "2026-05-20 00:07:00 +07"
+}

@@ -1,0 +1,10 @@
+{
+  "pod_key": "baseline/pg-server",
+  "namespace": "baseline",
+  "label": "benign",
+  "session_id": "20260519T235330",
+  "first_seen_unix": 1779209610.9569979,
+  "total_syscalls": 4987,
+  "kernel_ver_hint": "6.12",
+  "recorded_at": "2026-05-20 00:03:30 +07"
+}

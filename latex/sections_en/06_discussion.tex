@@ -1,0 +1,72 @@
+\section{Discussion}
+\label{sec:discussion}
+
+The results presented in the previous section validate the effectiveness, efficiency, and
+adaptability of the DeSFAM framework in minimizing the system call attack surface and detecting
+anomalous behavior in containerized environments. This section discusses key insights, design
+trade-offs, and the practical implications of deploying DeSFAM in real-world container security
+scenarios.
+
+\subsection{Hybrid Analysis Advantage}
+\label{subsec:hybrid_advantage}
+
+One of the core strengths of DeSFAM lies in its hybrid syscall profiling approach. By
+integrating static disassembly of container binaries with dynamic runtime tracing using eBPF
+and bpftrace, DeSFAM captures both expected and runtime-dependent syscall behavior. This
+dual-layer visibility ensures that rare but essential syscalls are not missed, unlike purely
+static systems such as Confine~\cite{ref31_confine}, which suffer from under-approximation, or
+dynamic-only systems like NIMOS~\cite{ref38_nimos}, which risk over-approximation.
+
+\subsection{Superior Reduction Without Functional Loss}
+\label{subsec:reduction_advantage}
+
+DeSFAM achieved an average syscall reduction rate of 78.60\%, which is significantly higher than
+Confine (47.60\%), Prof-gen (67.80\%), and NIMOS (63.40\%). Despite this aggressive
+minimization, all target containers retained full functionality across all test workloads. This
+confirms that DeSFAM's access list synthesis balances security and compatibility better than
+static or log-based access list generators.
+
+\subsection{High-Performance Real-Time Enforcement}
+\label{subsec:performance_advantage}
+
+The framework's use of eBPF for syscall filtering and policy management introduces minimal
+runtime overhead. CPU usage increased by an average of only 1.74\%, and memory usage by
+approximately 50~MB, well below the threshold that would impact container performance. Syscall
+latency remained under 300~nanoseconds per invocation, validating DeSFAM's suitability for
+high-throughput workloads such as Nginx and Redis. In comparison, user-space alternatives
+(e.g., auditd) typically introduce millisecond-scale delays.
+
+\subsection{Adaptive Response to Threats}
+\label{subsec:adaptive_advantage}
+
+DeSFAM's enforcement logic is not static. It dynamically updates syscall allowlists using risk
+scoring and anomaly detection outputs from the SyscallAD module. The model achieved 96\% overall
+accuracy, with an attack detection F1-score of 0.92 and a low false positive rate. This allowed
+DeSFAM to detect and respond to advanced CVE-based attacks (e.g., Polkit and Dirty Pipe) in
+real time, removing vulnerable syscalls such as \texttt{setuid}, \texttt{splice}, and
+\texttt{clone} immediately upon detection.
+
+\subsection{Limitations and Future Work}
+\label{subsec:limitations}
+
+While DeSFAM effectively reduces syscall exposure and detects anomalous behavior, its accuracy
+remains sensitive to the representativeness of training data. Future work will incorporate
+workload-aware profiling, container role classification, and continuous learning to improve
+generalization across diverse workloads.
+
+Current filtering operates at the syscall level (ID and sequence-based) without argument
+inspection. Table~\ref{tab:cve_filter_rules} summarizes the contextual filtering rules applied
+during CVE-based syscall extraction. Future extensions will explore argument-level analysis and
+memory access tracking via eBPF to further improve detection granularity and resilience against
+sophisticated attacks.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Filtering Rules for CVE-Based Syscall Extraction.}
+  \label{tab:cve_filter_rules}
+  \includegraphics[width=\linewidth]{table14}
+\end{table}
+
+Scalability in orchestrated environments is also a focus. Future deployments will integrate with
+Kubernetes via CRI hooks and namespace-aware policy enforcement, ensuring consistent,
+low-overhead protection across dynamic containerized clusters.

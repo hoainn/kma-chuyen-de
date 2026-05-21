@@ -1,0 +1,32 @@
+{
+  "dataset": "DongTing",
+  "test_normal": 678,
+  "test_attack": 1633,
+  "feature_dim": 78,
+  "models": {
+    "isolation_forest": {
+      "accuracy": 0.8788,
+      "precision": 0.9877,
+      "recall": 0.8389,
+      "f1": 0.9073,
+      "roc_auc": 0.9799,
+      "avg_prec": 0.9821
+    },
+    "vae": {
+      "accuracy": 0.9987,
+      "precision": 0.9982,
+      "recall": 1.0,
+      "f1": 0.9991,
+      "roc_auc": 1.0,
+      "avg_prec": 1.0
+    },
+    "ensemble_a0.7": {
+      "accuracy": 0.7728,
+      "precision": 0.9964,
+      "recall": 0.681,
+      "f1": 0.809,
+      "roc_auc": 0.9954,
+      "avg_prec": 0.9976
+    }
+  }
+}

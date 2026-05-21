@@ -1,0 +1,103 @@
+\section{Các Công Trình Liên Quan}
+\label{sec:related}
+
+Phần này thảo luận về các phương pháp tiên tiến được phân loại theo lọc, phát hiện bất thường,
+theo dõi xuất xứ và tăng cường bảo mật kernel, làm nổi bật điểm mạnh và hạn chế của chúng so
+với khung DeSFAM. Bảng~\ref{tab:related_work} tóm tắt các phương pháp lọc lời gọi hệ thống và
+phát hiện bất thường gần đây, làm nổi bật trọng tâm vấn đề, hạn chế và kỹ thuật cốt lõi của từng phương pháp.
+
+\begin{table*}[tp]
+  \centering
+  \caption{So sánh các giải pháp bảo mật container tiên tiến.}
+  \label{tab:related_work}
+  \includegraphics[width=\linewidth]{table1}
+\end{table*}
+
+\subsection{Các Phương Pháp Lọc Lời Gọi Hệ Thống}
+\label{subsec:syscall_filtering}
+
+Confine~\cite{ref31_confine} sử dụng phân tích tĩnh để xây dựng các hồ sơ seccomp hạn chế,
+đạt tỷ lệ giảm lời gọi hệ thống (SRR) là 47,6\%. Tuy nhiên, tính chất tĩnh của nó ngăn cản
+sự thích nghi với các hành vi thời gian chạy, làm giảm hiệu quả trước các khối lượng công việc
+luôn thay đổi. Tương tự, Prof-gen \cite{ref36_profgen} dựa vào các kỹ thuật tĩnh đòi hỏi cấu
+hình thủ công hoặc bỏ qua theo dõi động, hạn chế khả năng mở rộng và độ bền trong các triển
+khai thực tế.
+
+KubeRosy~\cite{ref29_kuberosy} và Optimus~\cite{ref27_optimus} tích hợp eBPF để giám sát lời
+gọi hệ thống trực tiếp và cập nhật chính sách thời gian chạy. KubeRosy tận dụng Kubernetes CRD
+để tinh chỉnh chính sách theo thời gian thực nhưng vẫn bị ràng buộc với môi trường Kubernetes.
+Optimus sử dụng lọc dựa trên liên kết để thích nghi lặp đi lặp lại các hồ sơ lời gọi hệ thống,
+tuy nhiên tính tự động của nó bị hạn chế---yêu cầu sự phê duyệt của người vận hành đối với các
+lời gọi hệ thống không khớp và dừng cập nhật hồ sơ nếu phân tích liên kết thất bại. Prof-gen,
+mặc dù kết hợp theo dõi động lúc khởi động với phân tích đồ thị lời gọi tĩnh để tạo danh sách
+truy cập tối thiểu mà không cần mã nguồn, vẫn thiếu khả năng nắm bắt các thay đổi hành vi trong
+quá trình thực thi thời gian chạy.
+
+\subsection{Hệ Thống Phát Hiện Xâm Nhập Dựa Trên Bất Thường}
+\label{subsec:anomaly_ids}
+
+Các kỹ thuật dựa trên học máy đã được nghiên cứu rộng rãi để phát hiện bất thường lời gọi hệ
+thống. IDS dựa trên BoSC sử dụng mô hình hóa Túi Lời Gọi Hệ Thống với các bộ phân loại như
+Rừng Ngẫu Nhiên, mang lại độ chính xác hợp lý trong môi trường quy mô nhỏ. Tuy nhiên, yêu cầu
+huấn luyện lại thường xuyên cản trở khả năng mở rộng và thích nghi.
+
+Các mô hình nhẹ như Bộ Phát Hiện Thoát dựa trên TinyML nhắm đến các thiết bị IoT và biên nhưng
+không đủ khả năng xử lý các véc-tơ tấn công phức tạp trong các hệ thống đám mây hiệu suất cao
+do tính thích nghi và độ chính xác hạn chế.
+
+DeSFAM giải quyết những hạn chế này trong Giai đoạn~2 thông qua bộ phát hiện bất thường lai kết
+hợp Bộ Mã Hóa Tự Động Biến Phân (VAE) với Rừng Cô Lập, được huấn luyện trên tập dữ liệu
+DongTing~\cite{ref26_dongtingdataset}. Phương pháp này cho phép phát hiện chính xác, độ trễ thấp
+đối với các cuộc tấn công zero-day mà không cần huấn luyện lại, đồng thời hỗ trợ suy luận cửa
+sổ trượt thời gian thực.
+
+\subsection{Các Phương Pháp Phát Hiện Dựa Trên Xuất Xứ}
+\label{subsec:provenance}
+
+Các hệ thống hướng xuất xứ như PACED giám sát các mối quan hệ lời gọi hệ thống và quan hệ nhân
+quả giữa các container để phát hiện các cuộc tấn công xuyên không gian tên. Mặc dù hiệu quả,
+chúng phải chịu chi phí cao do xây dựng đồ thị liên tục và khả năng mở rộng hạn chế.
+
+DeSFAM vượt qua điều này bằng cách nhúng ngữ cảnh lời gọi hệ thống (ví dụ: PID, không gian tên,
+dấu thời gian) trực tiếp vào các đặc trưng mô hình, cho phép nhận thức hành vi mà không phải
+chịu chi phí của việc theo dõi xuất xứ đầy đủ.
+
+\subsection{Các Cải Tiến Bảo Mật Cấp Kernel}
+\label{subsec:kernel_security}
+
+Các biện pháp phòng thủ tầng kernel như Condo sử dụng Môi Trường Thực Thi Đáng Tin Cậy (TEE) để
+bảo vệ tính toàn vẹn quyền hạn. Mặc dù an toàn, sự phụ thuộc vào phần cứng chuyên dụng và sửa
+đổi kernel khiến chúng không phù hợp cho các triển khai đám mây quy mô lớn.
+
+Ngược lại, DeSFAM đạt được tính di động và khả năng mở rộng bằng cách sử dụng các bản đồ eBPF
+và hook LSM để thực thi các chính sách lời gọi hệ thống một cách động, mà không cần sửa đổi
+kernel hay phụ thuộc vào TEE.
+
+\subsection{Các Hạn Chế Chung Của Các Phương Pháp Hiện Tại}
+\label{subsec:common_limitations}
+
+Mặc dù đã có những tiến bộ đáng kể trong việc tối thiểu hóa lời gọi hệ thống và bảo mật
+container, các giải pháp hiện tại vẫn đối mặt với một số hạn chế chính:
+
+\begin{itemize}
+  \item Các chính sách tĩnh không thể thích nghi với các hành vi thời gian chạy luôn thay đổi.
+  \item Thiếu thực thi thời gian thực cho phép lạm dụng lời gọi hệ thống giữa các lần cập nhật.
+  \item Các phương pháp học máy yêu cầu huấn luyện lại thường xuyên, hạn chế khả năng mở rộng.
+  \item Các phụ thuộc phần cứng (ví dụ: TEE) hạn chế tính linh hoạt trong triển khai.
+\end{itemize}
+
+\subsection{DeSFAM: Thúc Đẩy Trình Độ Hiện Tại}
+\label{subsec:desfam_advancement}
+
+DeSFAM giải quyết các hạn chế chính của các hệ thống trước thông qua một kiến trúc đa giai đoạn
+thống nhất. Nó kết hợp lập hồ sơ lời gọi hệ thống lai, kết hợp phân tách nhị phân tĩnh với theo
+dõi thời gian chạy động, để tạo ra các danh sách truy cập lời gọi hệ thống chính xác. Thực thi
+thời gian thực được thực hiện thông qua các probe eBPF và hook LSM, cho phép chặn độ trễ thấp
+và cập nhật chính sách mà không cần khởi động lại container. Phát hiện bất thường được xử lý
+bởi SyscallAD, một mô hình lai sử dụng Bộ Mã Hóa Tự Động Biến Phân và Rừng Cô Lập để phát hiện
+chính xác, không cần huấn luyện lại đối với các cuộc tấn công đã biết và zero-day. DeSFAM cũng
+tích hợp lọc nhận thức CVE và chấm điểm rủi ro dựa trên MITRE ATT\&CK để hạn chế động các lời
+gọi hệ thống dễ bị tổn thương, đồng thời áp dụng logic phản hồi phân tầng để thực thi các hành
+động chi tiết dựa trên mức độ nghiêm trọng của mối đe dọa. Khung hoạt động mà không cần sửa đổi
+kernel hay phụ thuộc vào các nền tảng điều phối, cung cấp bảo mật lời gọi hệ thống có khả năng
+mở rộng và thích nghi cho các môi trường container hiện đại.

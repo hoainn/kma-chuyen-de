@@ -1,0 +1,710 @@
+\section{DeSFAM: Dynamic eBPF-Driven Syscall Filtering and Anomaly Mitigation}
+\label{sec:desfam}
+
+This section presents the design and implementation of the proposed DeSFAM framework, detailing
+its architecture, operational phases, and enforcement strategy.
+
+\subsection{Overview}
+\label{subsec:overview}
+
+DeSFAM (Dynamic eBPF-Driven Syscall Filtering and Anomaly Mitigation) is a lightweight,
+real-time framework designed to reduce the kernel attack surface and detect anomalous syscall
+behavior in containerized environments. It enforces least-privilege syscall usage to mitigate
+threats such as privilege escalation, container escape, and syscall injection.
+Fig.~\ref{fig:architecture} illustrates the architectural workflow of the framework.
+
+DeSFAM operates in three integrated phases:
+\begin{itemize}
+  \item \textbf{Hybrid Syscall Access Listing and Seccomp Profiling:} Combines static call graph
+        extraction and dynamic eBPF tracing to construct a refined syscall access list, pruning
+        unnecessary and CVE-associated syscalls.
+  \item \textbf{Real-Time Monitoring and Anomaly Detection (SyscallAD):} Traces runtime syscall
+        sequences and analyzes them using a VAE + Isolation Forest ensemble to detect
+        sequence-level anomalies, including malicious use of permitted syscalls.
+  \item \textbf{Adaptive Enforcement and Policy Management:} Enforces blocking, rate-limiting,
+        or logging of high-risk syscalls using eBPF maps and LSM hooks, guided by risk scores
+        from SyscallAD, without disrupting container execution.
+\end{itemize}
+
+By integrating sequence-aware profiling, anomaly detection, and real-time enforcement, DeSFAM
+offers scalable, adaptive protection suited for modern cloud-native container deployments.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure1}
+  \caption{DeSFAM architecture showing the interaction between user-space syscall profiling,
+           anomaly detection, and kernel-space enforcement using eBPF and seccomp for adaptive,
+           real-time syscall control.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsection{Design Considerations}
+\label{subsec:design}
+
+The design of DeSFAM is guided by the need to enforce syscall least privilege while addressing
+the limitations of static-only filtering, high-overhead provenance tracking, and
+retraining-dependent anomaly detectors. Traditional seccomp profiles are either too permissive
+or brittle, failing to adapt to evolving runtime behavior. DeSFAM overcomes this by combining
+static and dynamic analysis, enabling accurate and context-aware syscall profiling.
+
+To ensure real-time enforcement without impacting container availability, DeSFAM leverages eBPF
+probes and LSM hooks, which operate entirely in kernel space and support dynamic policy updates
+with minimal latency. This design choice avoids the performance cost of continuous provenance
+graph construction and eliminates the need for kernel modification or container restarts.
+
+For anomaly detection, DeSFAM adopts a hybrid model (VAE + Isolation Forest) that captures
+behavioral patterns in syscall sequences while avoiding frequent retraining, supporting scalable
+and robust detection of zero-day attacks. Unlike hardware-bound solutions such as TEEs, DeSFAM
+remains fully software-based and portable, ensuring compatibility across a wide range of
+cloud-native deployments.
+
+\subsection{Phase 1: Hybrid Syscall Access Listing and Seccomp Profiling}
+\label{subsec:phase1}
+
+Container security hinges on precise syscall control, as containers share the host kernel and
+pose risks of unauthorized kernel access. Phase~1 of DeSFAM mitigates this by constructing a
+container-specific syscall access list through a hybrid approach combining static analysis,
+dynamic profiling, and CVE-based threat intelligence to generate a minimal and accurate seccomp
+profile.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure2}
+  \caption{DeSFAM Phase~1: Hybrid syscall access listing and seccomp profiling using static
+           analysis, eBPF monitoring, and CVE-informed filtering to generate secure
+           container-specific syscall policies.}
+  \label{fig:phase1}
+\end{figure}
+
+\subsubsection{Static Analysis}
+\label{subsubsec:static_analysis}
+
+Static analysis begins by examining container images, including Dockerfiles, binaries, and
+linked libraries, without executing them. Using tools like \texttt{objdump} and \texttt{readelf},
+ELF binaries are disassembled to extract low-level syscall instructions and libc wrapper
+functions.
+
+To enhance coverage, a Static Call Graph (SCG) is constructed using NetworkX to trace
+function-to-syscall mappings across the codebase. The resulting static syscall set,
+$S_{\text{static}}$, captures all identifiable syscalls reachable from the code's control flow.
+
+\begin{itemize}
+  \item \textbf{Input:} Container image (Dockerfile, ELF binaries)
+  \item \textbf{Tools:} \texttt{objdump}, \texttt{readelf}, \texttt{networkx}
+  \item \textbf{Process:} Disassemble ELF binaries, extract syscall paths via SCG traversal
+  \item \textbf{Output:} Static syscall list ($S_{\text{static}}$)
+\end{itemize}
+
+However, static analysis cannot detect syscalls invoked by runtime-resolved libraries or
+JIT-compiled code. Thus, while $S_{\text{static}}$ offers a foundational syscall set, it must
+be refined through dynamic analysis in subsequent phases.
+
+\subsubsection{Dynamic Profiling: Capturing Runtime Behavior}
+\label{subsubsec:dynamic_profiling}
+
+To address the limitations of static analysis, DeSFAM incorporates dynamic profiling by
+monitoring live syscall activity during container execution under standardized representative
+workloads. This phase captures syscalls triggered by runtime conditions including dynamically
+loaded libraries, environment-specific logic, and dependency interactions, while ensuring
+comprehensive coverage of typical operational behaviors.
+
+Containers execute under role-specific workloads designed using industry-standard benchmarks
+that reflect real-world operational profiles:
+
+\begin{itemize}
+  \item \textbf{Web servers (Nginx):} \texttt{wrk} with 500--10,000 concurrent connections;
+        ApacheBench simulating GET/POST requests at 1K--10K req/sec.
+  \item \textbf{Databases (MySQL/Redis/MongoDB):} SysBench OLTP workloads (100--500 threads,
+        1M+ transactions); \texttt{redis-benchmark} at 1M ops/sec.
+  \item \textbf{Application runtimes (Node.js/Python):} Locust load tests simulating 50--500
+        concurrent user flows; real-world dataset processing (GB-scale JSON/CSV parsing).
+\end{itemize}
+
+These workloads cover 90th-percentile production traffic patterns, container startup/shutdown
+sequences, dependency interactions, and failure scenarios.
+
+During execution, eBPF probes are attached to syscall entry points (\texttt{sys\_enter\_*}) to
+trace syscall events. The collected metadata includes syscall IDs, process IDs, timestamps, and
+namespace identifiers.
+
+\begin{itemize}
+  \item \textbf{Input:} Container instances under standardized workloads
+  \item \textbf{Tools:} eBPF via \texttt{bcc}/\texttt{bpftrace} with kernel-space tracing
+  \item \textbf{Process:} Deploy containers $\to$ attach eBPF probes $\to$ log metadata to ring
+        buffers $\to$ aggregate syscalls across 3 workload cycles
+  \item \textbf{Output:} Dynamic syscall list ($S_{\text{dynamic}}$)
+\end{itemize}
+
+\subsubsection{Threat Intelligence: CVE-Based Syscall Filtering}
+\label{subsubsec:cve_filtering}
+
+To enhance security awareness, DeSFAM integrates threat intelligence by incorporating CVE data
+from the National Vulnerability Database (NVD). Using natural language processing (NLP), we
+extract syscall names (e.g., \texttt{ptrace}, \texttt{clone}, \texttt{execve}) from CVE
+descriptions to build a list of high-risk syscalls, denoted as $S_{\text{blocked}}$.
+
+To construct $S_{\text{blocked}}$, we employ an NLP-based parsing engine that analyzes CVE
+reports retrieved from the NVD via its REST API. A rule-based keyword extraction technique is
+applied to identify syscall names mentioned in CVE descriptions. We utilize a curated dictionary
+of Linux syscall names derived from kernel source headers (e.g., \texttt{unistd64.h}) to ensure
+accurate mapping. Furthermore, to avoid overblocking, contextual metadata such as kernel version
+applicability, affected subsystems, exploit conditions, and argument constraints are extracted
+from the CVE text using pattern matching and regular expression parsing.
+
+\begin{itemize}
+  \item \textbf{Input:} CVE entries with syscall mentions
+  \item \textbf{Mapping:} Rule-based syscall extraction + context filtering
+  \item \textbf{Output:} Blocked syscall list ($S_{\text{blocked}}$)
+\end{itemize}
+
+This set is excluded from the union of static and dynamic syscall sets, ensuring vulnerable
+syscalls are omitted even if observed during profiling.
+
+\subsubsection{Final Access List Synthesis and Policy Generation}
+\label{subsubsec:synthesis}
+
+The final access list $S_{\text{final}}$ is computed as:
+\begin{equation}
+  S_{\text{final}} = \bigl(S_{\text{static}} \cup S_{\text{dynamic}}\bigr)
+                      \cap S_{\text{template}}
+                      \setminus S_{\text{blocked}}
+                      \setminus S_{\text{template}}
+  \label{eq:sfinal}
+\end{equation}
+
+Here, $S_{\text{template}}$ defines role-specific expected syscall behavior for the container
+(e.g., web server, database, GPU workload), serving as a functional boundary. The template
+syscalls are derived by combining several sources: official Docker default seccomp profiles,
+Linux kernel syscall documentation, community-maintained security rules from the Falco project,
+and empirical syscall traces collected during initial benign container executions.
+
+This multi-source approach ensures that rarely invoked but necessary syscalls during container
+initialization or uncommon execution paths are incorporated into $S_{\text{template}}$ while
+maintaining minimal syscall exposure.
+
+The CVE-based syscall set $S_{\text{blocked}}$ is generated by extracting exploit conditions,
+including kernel versions, device-specific vulnerabilities, or specific syscall argument
+patterns. This prevents overblocking syscalls that are only vulnerable under specific
+configurations not applicable to the container's runtime environment.
+
+The resulting access list $S_{\text{final}}$ is compiled into a seccomp policy
+(\texttt{seccomp\_profile.json}) enforced by the Linux kernel at runtime. Fig.~\ref{fig:phase1}
+and Algorithm~\ref{alg:phase1} summarize this process.
+
+\begin{algorithm}[htbp]
+\caption{Enhanced Hybrid Syscall Profiling}
+\label{alg:phase1}
+\begin{algorithmic}[1]
+  \Require Container image, running instance, CVE database
+  \Ensure Secure, functional syscall access list
+  \State Extract syscalls via static analysis $\to S_{\text{static}}$
+  \State Profile runtime under workload (dynamic profiling) $\to S_{\text{dynamic}}$
+  \State Parse CVEs with contextual analysis $\to S_{\text{blocked}}$
+  \State Generate $S_{\text{final}} = (S_{\text{static}} \cup S_{\text{dynamic}})
+         \cap S_{\text{template}} \setminus S_{\text{blocked}} \setminus S_{\text{template}}$
+  \State \Return $S_{\text{final}}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Container-Specific Policy Upload}
+\label{subsubsec:policy_upload}
+
+DeSFAM dynamically loads container-specific syscall policies using \texttt{policy\_loader}.
+Each policy reflects the container's behavioral profile from prior analysis and is written into
+the pinned eBPF map at \texttt{/sys/fs/bpf/blocked\_syscalls}. Namespace identifiers serve as
+keys for container isolation.
+
+This design enforces least-privilege syscall access per container at runtime, without restarting
+instances. Fig.~\ref{fig:policy_upload} shows the upload pipeline and the population of the
+Syscall map.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure3}
+  \caption{DeSFAM Phase~3: (a) Dynamic upload of container-specific syscall policies using
+           \texttt{policy\_loader}; (b) Verification of blocked syscalls in the pinned eBPF
+           map using \texttt{bpftool}.}
+  \label{fig:policy_upload}
+\end{figure}
+
+\subsection{Phase 2: Real-Time Monitoring and Syscall Anomaly Detection (SyscallAD)}
+\label{subsec:phase2}
+
+Phase~2 of DeSFAM introduces SyscallAD, a real-time anomaly detection module that combines deep
+learning and ensemble methods to identify both known and zero-day threats in containerized
+environments. It monitors syscall sequences using eBPF and detects behavioral deviations linked
+to privilege escalation, container escape, or syscall injection.
+
+SyscallAD employs a hybrid ensemble comprising a Variational Autoencoder (VAE), which learns
+latent representations of benign syscall patterns, and an Isolation Forest (iForest), which
+identifies statistical outliers. This combination enables robust, low-latency detection with
+minimal false positives and overhead.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure4}
+  \caption{DeSFAM Phase~2: Real-time syscall monitoring and anomaly detection using a hybrid
+           VAE + iForest model. The offline module is trained on DongTing sequences, while the
+           online module processes live syscalls via eBPF for anomaly evaluation and policy
+           escalation.}
+  \label{fig:phase2}
+\end{figure}
+
+\subsubsection{The DongTing Dataset: Behavioral Baselines for Detection}
+\label{subsubsec:dongting}
+
+SyscallAD is trained on the DongTing dataset~\cite{ref26_dongtingdataset}, which comprises
+18,966 syscall sequences and over 2.6~million individual syscalls collected from containerized
+applications. The dataset is split into:
+
+\begin{itemize}
+  \item \textbf{6,850 benign sequences:} Captured from normal workloads such as web servers and
+        databases executing file I/O (\texttt{open}, \texttt{read}) and memory operations
+        (\texttt{mmap}, \texttt{futex}).
+  \item \textbf{12,116 malicious sequences:} Generated through simulated attacks, including
+        privilege escalation (\texttt{setuid}), filesystem tampering (\texttt{unlink}), and
+        network intrusion (\texttt{socket}).
+\end{itemize}
+
+Each sequence includes syscall IDs, timestamps, and contextual metadata (e.g., process IDs,
+namespaces). Given the inherent class imbalance, sampling techniques were applied to prevent
+model bias.
+
+\subsubsection{PrefixSpan Pattern Mining: Extracting Trusted Syscall Templates}
+\label{subsubsec:prefixspan}
+
+To reduce false positives and improve detection efficiency, DeSFAM integrates
+PrefixSpan~\cite{prefixspan_pei}---a sequential pattern mining algorithm---on the benign subset
+of the DongTing dataset. This identifies frequent syscall subsequences that represent legitimate
+container behavior.
+
+The resulting Benign Pattern Database is used to:
+\begin{itemize}
+  \item Match incoming syscall windows against known-good patterns for early benign
+        classification.
+  \item Bypass deep anomaly scoring for matched sequences, reducing computational overhead.
+  \item Provide semantic traceability for security decisions.
+\end{itemize}
+
+\subsubsection{Feature Engineering: Structuring Syscall Sequences for Detection}
+\label{subsubsec:features}
+
+SyscallAD applies multi-dimensional feature engineering to convert raw syscall streams into
+actionable model inputs:
+
+\begin{itemize}
+  \item \textbf{Sliding Windows:} Syscalls are segmented into overlapping windows (length~15,
+        stride~3), capturing both short-term anomalies and extended behavior patterns.
+  \item \textbf{Categorical Frequencies:} Syscalls are mapped to functional categories (e.g.,
+        file I/O, memory, network), and their frequency per window forms a behavioral signature.
+  \item \textbf{Temporal Features:} Inter-syscall time intervals (temporal deltas) are
+        summarized (mean, std, max) to detect abnormal timing behaviors.
+  \item \textbf{Access List Pattern Matching:} Each window is cross-checked against benign
+        patterns from PrefixSpan; matches increase confidence in benign classification, reducing
+        false positives.
+  \item \textbf{Data Augmentation:} Malicious sequences are synthetically modified (e.g.,
+        insertion or permutation of high-risk syscalls like \texttt{clone}, \texttt{setuid}) to
+        simulate zero-day scenarios, improving model robustness.
+\end{itemize}
+
+\subsubsection{SyscallAD: Hybrid Deep Learning and Anomaly Detection Engine}
+\label{subsubsec:syscallad}
+
+SyscallAD is a hybrid anomaly detection module designed to identify behavioral deviations in
+syscall sequences with high precision and adaptability.
+
+\paragraph{Optimized Variational Autoencoder (VAE)}
+The VAE employs an encoder-decoder architecture ($32 \to 8 \to 32$ neurons) with SELU
+activations, dropout ($p = 0.2$), and L2 regularization. It learns to reconstruct benign
+syscall windows by minimizing Mean Squared Reconstruction Error (MSRE). Anomalies are flagged
+when MSRE exceeds the 99.5th percentile of benign training errors.
+
+\paragraph{Isolation Forest (iForest)}
+iForest isolates anomalies through recursive partitioning. Rare syscall sequences yield shallower
+isolation trees and higher anomaly scores. A contamination parameter of 2\% controls sensitivity,
+allowing detection of statistically rare behaviors missed by VAE.
+
+\paragraph{Ensemble Fusion Strategy}
+SyscallAD combines the strengths of VAE and Isolation Forest through a weighted score fusion
+mechanism. Each syscall window $W_i$ is evaluated by both models:
+\begin{itemize}
+  \item $A_{\text{VAE}}(W_i)$: Anomaly score based on Mean Squared Reconstruction Error.
+  \item $A_{\text{iForest}}(W_i)$: Score derived from isolation depth in the Isolation Forest.
+\end{itemize}
+
+The final score is computed as:
+\begin{equation}
+  A(W_i) = \alpha \cdot A_{\text{VAE}}(W_i) + (1 - \alpha) \cdot A_{\text{iForest}}(W_i)
+  \label{eq:ensemble}
+\end{equation}
+where $\alpha = 0.7$ prioritizes the VAE's contribution. This value was validated via
+sensitivity analysis over $\alpha \in \{0.0, 0.25, 0.5, 0.7, 0.85, 1.0\}$ on the DongTing
+dataset, as shown in Fig.~\ref{fig:sensitivity}.
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\linewidth]{figure6}
+  \caption{Sensitivity analysis of fusion weight $\alpha$ on F1-Score and AUC.
+           Peak performance is observed at $\alpha = 0.7$.}
+  \label{fig:sensitivity}
+\end{figure*}
+
+Fig.~\ref{fig:syscallad_output} presents the anomaly logs from \texttt{test-mysql} and
+\texttt{test-redis} containers. Benign syscalls such as \texttt{futex}, \texttt{epoll\_wait},
+and \texttt{wait4} are correctly classified, while anomalies like \texttt{clone} and
+\texttt{ioctl}, indicative of escape or privilege escalation attempts, are effectively flagged.
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\linewidth]{figure5}
+  \caption{SyscallAD output from DeSFAM Phase~2: normal behavior in \texttt{test-mysql}
+           contrasted with anomalous syscall detections in \texttt{test-redis}
+           (e.g., \texttt{clone}, \texttt{ioctl}).}
+  \label{fig:syscallad_output}
+\end{figure*}
+
+\paragraph{Dynamic Thresholding: Adaptive Anomaly Boundary Adjustment}
+To accommodate evolving syscall behavior, SyscallAD employs dynamic thresholding based on an
+Exponential Moving Average (EMA), rather than a fixed cut-off. The initial threshold $T_0$ is
+set to the 99.5th percentile of VAE reconstruction errors on benign validation data. During
+runtime, the threshold is updated after each syscall window $W_i$ as:
+\begin{equation}
+  T_{t+1} = \max\bigl(T_{\min},\; \beta T_t + (1 - \beta) A(W_i)\bigr)
+  \label{eq:threshold}
+\end{equation}
+where $\beta = 0.9$ controls update sensitivity and $T_{\min} = 0.5$ enforces a lower bound.
+
+Final detection is defined as:
+\begin{equation}
+  \mathrm{Flag}(W_i) =
+  \begin{cases}
+    1, & \text{if } A(W_i) > T \\
+    0, & \text{otherwise}
+  \end{cases}
+  \label{eq:flag}
+\end{equation}
+
+\subsubsection{Real-Time Monitoring with eBPF: Low-Overhead Container-Aware Syscall Capture}
+\label{subsubsec:ebpf_monitoring}
+
+DeSFAM utilizes eBPF tracepoints to enable fine-grained, low-overhead syscall surveillance
+directly at the Linux kernel level. The BPF program hooks into
+\texttt{(raw\_syscalls:sys\_enter)} and \texttt{(raw\_syscalls:sys\_exit)}, enabling the
+interception of syscall invocations at their entry and exit points.
+
+To isolate syscall activity from containerized workloads, DeSFAM dynamically maps container
+PIDs by querying the Docker runtime and injecting them into a \texttt{pid\_map} BPF hash table.
+Only syscalls originating from these PIDs are recorded, ensuring container-specific tracing
+without unnecessary system noise.
+
+Captured syscall events are enriched with contextual metadata including: syscall ID, timestamp
+(nanosecond resolution), process and parent PIDs, command name, container name, and syscall
+return value. These are sent from kernel to user space via a \texttt{ring\_buffer} and logged to
+per-container files in JSON format. Simultaneously, syscall IDs are appended to a rolling deque
+(sliding window of size~15) in memory for each container. Fig.~\ref{fig:ebpf_log} shows a
+representative real-time syscall log for a MySQL container.
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\linewidth]{figure7}
+  \caption{Real-time eBPF syscall log for \texttt{kubepro-mysql-1}, showing timestamped syscall
+           events with PID, container name, user, and return value.}
+  \label{fig:ebpf_log}
+\end{figure*}
+
+\subsubsection{DevOps Integration: Continuous Model Refinement}
+\label{subsubsec:devops}
+
+To mitigate false positives and adapt to evolving workloads, DeSFAM integrates a DevOps-driven
+feedback loop within Phase~2. Anomalous syscall sequences, along with metadata (e.g., container
+name, PID, timestamp), are logged and visualized for analyst review. Security teams can annotate
+detections as true or false positives, with validated false positives appended to the benign
+training set.
+
+SyscallAD periodically retrains its VAE + iForest ensemble on this augmented dataset, enabling
+it to learn new benign variations introduced by environment-specific workloads or edge cases.
+
+The full detection workflow is formalized in Algorithm~\ref{alg:phase2}.
+
+\begin{algorithm}[htbp]
+\caption{Real-Time Syscall Anomaly Detection (SyscallAD)}
+\label{alg:phase2}
+\begin{algorithmic}[1]
+  \Require eBPF hook, trained VAE and iForest models,
+           validation reconstruction errors $E_{\text{val}}$
+  \Ensure Anomaly flag for each syscall window
+  \State Initialize sliding windows $W_i \leftarrow \emptyset$ for $i \in \{5, 10, 15\}$
+  \State Load trained VAE and iForest models
+  \State Compute $T_0 \leftarrow \text{percentile}(E_{\text{val}}, 99.5)$
+  \State Set threshold $T \leftarrow T_0$
+  \While{syscall stream is active}
+    \State Capture syscall $s_t$ at time $t$
+    \State Append $s_t$ to each $W_i$
+    \For{each full window $W_i$}
+      \State $f_i \leftarrow \text{extract\_features}(W_i)$
+      \State $A_{\text{VAE}} \leftarrow \text{VAE\_score}(f_i)$
+      \State $A_{\text{iForest}} \leftarrow \text{iForest\_score}(f_i)$
+      \State $A(W_i) \leftarrow 0.7 \cdot A_{\text{VAE}} + 0.3 \cdot A_{\text{iForest}}$
+      \If{$A(W_i) > T$}
+        \State Flag $W_i$ as anomalous; escalate to Phase~3
+      \Else
+        \State $T \leftarrow \max(T_{\min},\; \beta \cdot T + (1 - \beta) \cdot A(W_i))$
+      \EndIf
+      \State Slide $W_i$ forward
+    \EndFor
+  \EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Phase 3: Adaptive Syscall Enforcement and Policy Management}
+\label{subsec:phase3}
+
+Adaptive Syscall Enforcement is the third phase of the DeSFAM framework. It focuses on
+dynamically enforcing syscall policies in containerized environments in real time. This phase
+integrates risk scoring, contextual analysis, and external threat intelligence to deliver
+adaptive and precise security responses.
+
+\subsubsection{Risk Scoring Mechanism}
+\label{subsubsec:risk_scoring}
+
+DeSFAM quantifies the threat level of each anomalous syscall sequence $W_i$ using a composite
+risk score derived from three components.
+
+\paragraph{MITRE ATT\&CK Mapping}
+Each syscall in $W_i$ is mapped to associated adversarial techniques (e.g., T1055 for
+\texttt{ptrace}) based on a predefined lookup (Table~\ref{tab:mitre_mapping}). This contextual
+mapping enables reasoning beyond isolated calls to recognize high-level attack patterns.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Example Syscall-to-MITRE ATT\&CK Technique Mapping.}
+  \label{tab:mitre_mapping}
+  \includegraphics[width=\linewidth]{table2}
+\end{table*}
+
+\paragraph{Cumulative Severity}
+The cumulative severity score aggregates the individual severity scores of syscalls in the
+sequence:
+\begin{equation}
+  \text{Cumulative Severity} = \sum_{t \in W_i} \text{Severity}(t)
+  \label{eq:severity}
+\end{equation}
+
+\paragraph{Exploit Pattern Matching}
+Each sequence $W_i$ is evaluated against known CVE exploit signatures. If a match is found, an
+additional risk penalty is applied:
+\begin{equation}
+  I(\text{Exploit Match}) =
+  \begin{cases}
+    1, & \text{if matched} \\
+    0, & \text{otherwise}
+  \end{cases}
+  \label{eq:exploit_match}
+\end{equation}
+
+\paragraph{Final Risk Score}
+The final risk score integrates both severity and exploit intelligence:
+\begin{equation}
+  \text{Risk Score} = \sum_{t \in W_i} \text{Severity}(t) + 5 \cdot I(\text{Exploit Match})
+  \label{eq:risk_score}
+\end{equation}
+
+\paragraph{Policy Decision Logic}
+Based on the computed risk score, DeSFAM applies a three-tier enforcement strategy:
+\begin{equation}
+  \text{Action} =
+  \begin{cases}
+    \text{Block},       & \text{if Risk Score} \geq 8 \\
+    \text{Rate-limit},  & \text{if } 5 \leq \text{Risk Score} < 8 \\
+    \text{Log},         & \text{if Risk Score} < 5
+  \end{cases}
+  \label{eq:action}
+\end{equation}
+
+These thresholds are empirically tuned and remain configurable for deployment-specific risk
+postures. Table~\ref{tab:risk_examples} presents sample sequences and corresponding actions.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Example Risk Scores for Benign and Malicious Sequences.}
+  \label{tab:risk_examples}
+  \includegraphics[width=\linewidth]{table3}
+\end{table}
+
+\subsubsection{eBPF-Based Enforcement}
+\label{subsubsec:ebpf_enforcement}
+
+DeSFAM enforces syscall policies through eBPF programs attached to LSM hooks. Specifically,
+these programs are loaded and attached using \texttt{bpf\_program\_attach\_lsm()} to intercept
+system calls at the LSM's \texttt{security\_syscall} hook.
+
+\paragraph{LSM Hook Attachment}
+eBPF programs are dynamically attached to the \texttt{security\_syscall} LSM hook:
+
+\begin{lstlisting}[float=htbp, language=C, caption={eBPF LSM hook attachment.}]
+// eBPF Hook Attachment
+struct bpf_program *prog =
+    bpf_object__find_program_by_name(obj, "enforce_policy");
+struct bpf_link *link = bpf_program_attach_lsm(prog);
+\end{lstlisting}
+
+The hook function signature:
+\begin{lstlisting}[float=htbp, language=C, caption={LSM hook function signature.}]
+SEC("lsm/syscall")
+int BPF_PROG(enforce_policy, int syscall_num,
+             struct pt_regs *regs) {
+    // Enforcement logic here
+}
+\end{lstlisting}
+
+\paragraph{Policy Map Structure}
+Syscall actions are stored in a hash-based eBPF map indexed by container identifiers:
+
+\begin{lstlisting}[float=htbp, language=C, caption={Container-keyed eBPF policy map.}]
+struct container_key {
+    u32 mntns;  // Mount namespace ID
+    u32 pidns;  // PID namespace ID
+};
+
+struct bpf_map_def SEC("maps") policy_map = {
+    .type       = BPF_MAP_TYPE_HASH,
+    .key_size   = sizeof(struct container_key),
+    .value_size = sizeof(u64),
+    .max_entries = 144,
+};
+\end{lstlisting}
+
+The map is pinned at \texttt{/sys/fs/bpf/blocked\_syscalls} for runtime updates via
+\texttt{policy\_loader}.
+
+\paragraph{Syscall Blocking Mechanism}
+The actual blocking of syscalls occurs within the eBPF hook attached to the
+\texttt{security\_syscall} LSM. The critical enforcement primitive uses kernel function override:
+\begin{lstlisting}[float=htbp, language=C, caption={Syscall blocking via kernel function override.}]
+// Immediate syscall denial
+bpf_override_return(regs, -EPERM);
+\end{lstlisting}
+
+The enforcement workflow:
+\begin{enumerate}
+  \item Retrieve container context: \texttt{mntns = bpf\_get\_ns\_id(NS\_MNT);
+        pidns = bpf\_get\_ns\_id(NS\_PID);}
+  \item Query policy map: \texttt{u64 *action = bpf\_map\_lookup\_elem(\&policy\_map, \&key);}
+  \item Enforce action:
+        \textbf{BLOCK}: Deny via \texttt{bpf\_override\_return(regs, -EPERM)};
+        \textbf{RATE\_LIMIT}: Allow $N$ invocations/minute via atomic counters;
+        \textbf{LOG}: Record metadata via ring buffer.
+\end{enumerate}
+
+\paragraph{Self-Healing Access List via Seccomp Regeneration}
+To ensure long-term policy evolution, DeSFAM incorporates a self-healing mechanism that
+automatically refines static syscall access lists based on repeated runtime blocks.
+
+Blocked syscalls are tracked in-kernel using a Least Recently Used (LRU) cache map called
+\texttt{probation\_map}:
+
+\begin{lstlisting}[float=htbp, language=C, caption={Probation map for tracking repeated blocks.}]
+struct probation_key {
+    struct container_key ckey;
+    u32 syscall;  // Syscall number
+};
+
+SEC("maps") struct bpf_map_def probation_map = {
+    .type       = BPF_MAP_TYPE_LRU_HASH,
+    .key_size   = sizeof(struct probation_key),
+    .value_size = sizeof(u32),  // Block counter
+    .max_entries = 512,
+};
+\end{lstlisting}
+
+If a syscall is blocked three or more times within a configurable window and is not previously
+annotated as benign, the kernel triggers a user-space daemon via
+\texttt{bpf\_send\_signal(SIGUSR1)}. This daemon resolves the syscall name, locates and updates
+the corresponding container's seccomp profile, and removes the flagged syscall from the access
+list. This adaptive defense loop ensures that newly deployed containers inherit hardened,
+exploit-aware syscall policies without requiring restarts or manual review.
+
+\paragraph{Formal Policy Model}
+Let $S$ be the set of valid syscalls, and $M$, $N$ represent mount and PID namespaces. The
+enforcement policy is defined as:
+\begin{equation}
+  P : S \times M \times N \to \{0, 1\}
+  \label{eq:policy_func}
+\end{equation}
+\begin{equation}
+  \text{Decision}(s) =
+  \begin{cases}
+    \text{Allow}, & \text{if } P(s, \mathit{mntns}, \mathit{pidns}) = 1 \\
+    \text{Block},  & \text{otherwise}
+  \end{cases}
+  \label{eq:decision}
+\end{equation}
+
+This container-aware logic ensures syscall isolation and enforces least-privilege access per
+namespace. The combined use of eBPF tracepoints and LSM hooks enables fast, layered enforcement
+with minimal overhead.
+
+The enforcement procedure in Phase~3 is formalized through Algorithm~\ref{alg:phase3}, and the
+complete enforcement pipeline is illustrated in Fig.~\ref{fig:phase3}.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{figure8}
+  \caption{DeSFAM Phase~3 -- Adaptive enforcement pipeline. Anomalous syscall sequences from
+           Phase~2 are intercepted and acted upon via eBPF and LSM hooks.}
+  \label{fig:phase3}
+\end{figure}
+
+\begin{algorithm}[htbp]
+\caption{Adaptive Syscall Enforcement With Auto-Hardening}
+\label{alg:phase3}
+\begin{algorithmic}[1]
+  \Require Anomalous sequence $W_i$, MITRE mapping, exploit database,
+           container context (\textit{mntns}, \textit{pidns}), eBPF map \texttt{policy\_map}
+  \Ensure Enforcement action: ``Block'', ``Rate-limit'', or ``Log''
+  \State Initialize $\mathit{Risk\_Score} \leftarrow 0$
+  \For{each syscall $t$ in $W_i$}
+    \State $\mathit{Risk\_Score} \leftarrow \mathit{Risk\_Score} + \text{Severity}(t)$
+  \EndFor
+  \If{$W_i$ matches an exploit in the database}
+    \State $\mathit{Risk\_Score} \leftarrow \mathit{Risk\_Score} + 5$
+  \EndIf
+  \If{$\mathit{Risk\_Score} \geq 8$}
+    \State $\mathit{action} \leftarrow$ ``Block''
+  \ElsIf{$5 \leq \mathit{Risk\_Score} < 8$}
+    \State $\mathit{action} \leftarrow$ ``Rate-limit''
+  \Else
+    \State $\mathit{action} \leftarrow$ ``Log''
+  \EndIf
+  \For{each syscall $t$ in $W_i$}
+    \State Update $\texttt{policy\_map}[(t, \mathit{mntns}, \mathit{pidns})] \leftarrow \mathit{action}$
+    \State Enforce $\mathit{action}$ on $t$ via eBPF
+    \State Log event $(t, \mathit{action}, \mathit{mntns}, \mathit{pidns})$
+  \EndFor
+  \If{$\mathit{action} = $ ``Block''}
+    \For{each syscall $t$ in $W_i$}
+      \State $\mathit{probation\_count}[t] \leftarrow \mathit{probation\_count}[t] + 1$
+      \If{$\mathit{probation\_count}[t] \geq 3$ \textbf{and} $t$ not annotated as benign}
+        \State Trigger seccomp access list update for syscall $t$
+      \EndIf
+    \EndFor
+  \EndIf
+  \State \Return $\mathit{action}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Use Case: Privilege Escalation Attempt and Real-World CVE Defense}
+\label{subsubsec:usecase}
+
+Consider a container running under DeSFAM's restrictive policy designed to block privilege
+escalation attempts. A typical attack sequence---\texttt{clone()}, \texttt{setuid()},
+\texttt{execve()}---is intercepted at the kernel level.
+
+Assume the process operates in mount namespace $\mathit{mntns} = 1001$ and PID namespace
+$\mathit{pidns} = 2001$. Upon invocation of \texttt{setuid()}, DeSFAM consults its
+per-container policy: \texttt{policy\_map[1001, 2001] = [..., 1, 0, 1, ...]}, where each entry
+denotes the action for a syscall ID ($0 = \text{BLOCK}$, $1 = \text{ALLOW}$). Since
+\texttt{setuid()} is mapped to 0, the syscall is denied. The eBPF LSM hook,
+\texttt{realtime\_blocking}, enforces this decision in the kernel, returning \texttt{-EPERM}
+and logging the event for auditing. This ensures immediate, in-kernel mitigation of exploit
+attempts without requiring container restarts or user-space intervention.

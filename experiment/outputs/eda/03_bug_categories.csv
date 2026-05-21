@@ -1,0 +1,14 @@
+,count,pct
+KASAN,2954,24.4
+WARNING,2633,21.7
+general_protection_fault,1793,14.8
+memory_leak,1485,12.3
+possible_deadlock,823,6.8
+BUG,743,6.1
+INFO,712,5.9
+KMSAN,376,3.1
+kernel_BUG,213,1.8
+other,154,1.3
+UBSAN,106,0.9
+inconsistent_lock_state,73,0.6
+divide_error,51,0.4

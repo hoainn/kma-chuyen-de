@@ -1,0 +1,30 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented DeSFAM, a multi-phase, adaptive security framework for protecting
+containerized environments against syscall-level threats. Unlike static filtering approaches,
+DeSFAM combines static and dynamic syscall profiling, hybrid deep learning-based anomaly
+detection, contextual risk scoring, and real-time in-kernel enforcement using eBPF and LSM hooks.
+
+At its core, DeSFAM integrates SyscallAD, a hybrid anomaly detection engine combining a
+Variational Autoencoder (VAE) and Isolation Forest to identify malicious syscall patterns based
+on frequency, sequence context, and timing features. The system also supports self-healing
+access list refinement, adapting syscall policies over time based on container-specific
+behaviors.
+
+To enable threat-aware enforcement, DeSFAM maps syscalls to MITRE ATT\&CK techniques and known
+CVEs, driving tiered enforcement strategies (log, rate-limit, block) based on dynamic risk
+scores. All policy enforcement is executed in-kernel, ensuring low-latency response and minimal
+performance overhead.
+
+We evaluated DeSFAM on the DongTing dataset and real-world exploits (e.g.,
+CVE-2021-4034~\cite{cve_2021_4034}). Results show high detection accuracy, sub-millisecond
+enforcement latency, and only 1.94\% average CPU overhead. Compared to Confine, Optimus, and
+KubeRosy, DeSFAM achieves better syscall coverage, faster enforcement, and improved resilience.
+Our ablation study confirms that while Phase~1 enables foundational syscall reduction (62.4\%),
+it is the combined effect of Phase~2's real-time anomaly detection and Phase~3's in-kernel
+enforcement that achieves complete CVE blocking (14/14) and zero false positives.
+
+DeSFAM offers a scalable, workload-aware syscall defense model suitable for modern container
+infrastructures. Future enhancements include tighter Kubernetes integration, syscall argument
+validation, and automated response orchestration to further improve precision and adaptability.

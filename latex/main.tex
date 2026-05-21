@@ -1,0 +1,80 @@
+\documentclass[journal,10pt,twoside]{IEEEtran}
+
+% LuaLaTeX: Unicode native, no inputenc/fontenc needed
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+
+% Vietnamese babel support
+\usepackage[vietnamese]{babel}
+
+% Math
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+
+% Algorithms
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+% Rename Require/Ensure to Vietnamese
+\renewcommand{\algorithmicrequire}{\textbf{Đầu vào:}}
+\renewcommand{\algorithmicensure}{\textbf{Đầu ra:}}
+
+% Code listings (LuaLaTeX handles UTF-8 in lstlisting natively)
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  showstringspaces=false,
+}
+
+% Tables
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+
+% Graphics
+\usepackage{graphicx}
+\usepackage{subfig}
+\graphicspath{{figure/}}
+
+% Hyperlinks
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+% Other utilities
+\usepackage{cite}
+
+% =====================
+\begin{document}
+
+\title{DeSFAM: Một Framework Thích Nghi Dựa trên eBPF và AI để Bảo Mật Container Đám Mây Theo Thời Gian Thực}
+
+\author{SEHAR ZEHRA\textsuperscript{1},
+HASSAN JAMIL SYED\textsuperscript{2},
+FAHAD SAMAD\textsuperscript{3},
+VÀ UMMAY FASEEHA\textsuperscript{1}, (Thành viên, IEEE)
+\thanks{\textsuperscript{1}Khoa Khoa học Máy tính, Đại học Quốc gia FAST về Khoa học Máy tính và Khoa học Nổi bật, Karachi 75030, Pakistan}
+\thanks{\textsuperscript{2}Đại học Công nghệ và Đổi mới Châu Á Thái Bình Dương (APU), Kuala Lumpur 57000, Malaysia}
+\thanks{\textsuperscript{3}Khoa An ninh mạng, Đại học Quốc gia FAST về Khoa học Máy tính và Khoa học Nổi bật, Karachi 75030, Pakistan}
+\thanks{Tác giả liên hệ: Hassan Jamil Syed (hassan.jamil@apu.edu.my)}
+\thanks{Nghiên cứu này được tài trợ bởi Đại học Công nghệ và Đổi mới Châu Á Thái Bình Dương (APU), Kuala Lumpur, Malaysia.}
+\thanks{Bản gốc tiếng Anh: \textit{IEEE Access}, tập 13, 2025, DOI: 10.1109/ACCESS.2025.3592192. Bản dịch tiếng Việt phục vụ mục đích học thuật.}
+}
+
+\maketitle
+
+\input{sections/00_abstract}
+\input{sections/01_introduction}
+\input{sections/02_background}
+\input{sections/03_related_work}
+\input{sections/04_desfam}
+\input{sections/05_evaluation}
+\input{sections/06_discussion}
+\input{sections/07_conclusion}
+\input{sections/appendix_a}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

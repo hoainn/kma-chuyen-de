@@ -1,0 +1,1370 @@
+Received 1 July 2025, accepted 17 July 2025, date of publication 24 July 2025, date of current version 12 August 2025.
+Digital Object Identifier 10.1109/ACCESS.2025.3592192
+
+
+
+
+DeSFAM: An Adaptive eBPF and AI-Driven
+Framework for Securing Cloud Containers
+in Real Time
+SEHAR ZEHRA 1 , HASSAN JAMIL SYED 2 , FAHAD SAMAD                                                    3,
+
+AND UMMAY FASEEHA 1 , (Member, IEEE)
+1 Department of Computer Science, FAST National University of Computer and Emerging Sciences, Karachi 75030, Pakistan
+2 Asia Pacific University of Technology and Innovation (APU), Kuala Lumpur 57000, Malaysia
+3 Department of Cyber Security, FAST National University of Computer and Emerging Sciences, Karachi 75030, Pakistan
+
+Corresponding author: Hassan Jamil Syed (hassan.jamil@apu.edu.my)
+This work was supported by the Asia Pacific University of Technology and Innovation (APU), Kuala Lumpur, Malaysia.
+
+
+
+
+  ABSTRACT Containerized applications offer lightweight and scalable deployment but remain exposed to
+  security risks due to a shared kernel. We present DeSFAM (Dynamic eBPF-driven Syscall Filtering and
+  Anomaly Mitigation), a real-time security framework that enforces least-privilege syscall usage and detects
+  behavioral anomalies. DeSFAM integrates: 1) hybrid syscall profiling through static analysis and dynamic
+  eBPF tracing; 2) SyscallAD (System call Anomaly Detection), a low-latency anomaly detector combining
+  Variational Autoencoder (VAE) and Isolation Forest (iForest); 3) contextual risk scoring based on MITRE
+  ATT&CK mappings and CVE correlations; and 4) adaptive syscall enforcement using eBPF maps and LSM
+  hooks. Evaluations using the DongTing dataset and real-world CVE attack scenarios show DeSFAM achieves
+  94% precision, 90% recall, sub-millisecond enforcement latency, and less than 1% performance overhead.
+  DeSFAM effectively blocks privilege escalation, container escape attempts, and syscall injection attacks in
+  modern container environments.
+
+  INDEX TERMS Anomaly detection, cloud containers, container security, eBPF monitoring, real-time threat
+  detection, syscall filtering, seccomp hardening.
+
+
+I. INTRODUCTION                                                                                    To overcome these limitations, we propose DeSFAM,
+Containerization has become a cornerstone of cloud-native                                       Dynamic eBPF-Driven Syscall Filtering and Anomaly
+computing due to its efficiency and scalability. Unlike                                         Mitigation. DeSFAM provides real-time syscall profiling,
+traditional virtual machines, containers share the host OS                                      deep anomaly detection, and adaptive policy enforcement.
+kernel, leading to reduced overhead but also introducing                                        It integrates: (i) Hybrid Syscall access listing using static
+critical security risks through system calls (syscalls)—the                                     and eBPF-based dynamic analysis; (ii) SyscallAD, a detec-
+interface between user space and the kernel [1], [2].                                           tion engine combining Variational Autoencoder (VAE) and
+   Syscalls expose a broad attack surface, making them                                          Isolation Forest (iForest) for identifying anomalous syscall
+attractive targets for privilege escalation, container escape,                                  sequences; and (iii) Adaptive Policy Management that
+and other exploits [3], [4]. Existing solutions like seccomp                                    uses MITRE Adversarial Tactics, Techniques, and Common
+profiles offer only limited protection. Static profiles are hard                                Knowledge (ATT&CK) framework mappings, Common
+to maintain and may block legitimate operations or fail to                                      Vulnerabilities and Exposures (CVE) correlations, and eBPF
+detect sophisticated threats [5], [6], [7].                                                     LSM hooks for context-aware syscall control.
+                                                                                                   DeSFAM enforces fine-grained syscall control using eBPF
+                                                                                                maps and LSM hooks, dynamically blocking high-risk
+   The associate editor coordinating the review of this manuscript and                          syscalls (e.g., execve, ptrace) and updating policies at
+approving it for publication was Fabrizio Messina             .                                 runtime without requiring container restarts. It combines a
+                                                  2025 The Authors. This work is licensed under a Creative Commons Attribution 4.0 License.
+VOLUME 13, 2025                                          For more information, see https://creativecommons.org/licenses/by/4.0/                       139203
+                                                   S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+hybrid syscall profiling pipeline with SyscallAD, a low-               namespace. Without rigorous syscall control, a compromise
+latency anomaly detector based on Variational Autoencoder              in one container can lead to lateral movement or host takeover
+(VAE) and Isolation Forest. To prioritize threats, DeSFAM              [11], [12].
+integrates contextual risk scoring by correlating syscall
+behaviors with MITRE ATT&CK tactics and known CVEs.                    B. TYPES OF SYSCALL-BASED THREATS
+Evaluations using the DongTing dataset and real-world                  System calls expose core kernel functions, making them
+CVE scenarios demonstrate 94% precision, 90% recall, sub-              prime targets in containerized environments. Attackers
+millisecond enforcement latency, and under 1% performance              exploit them to escalate privileges, escape isolation, or abuse
+overhead.                                                              over-permissive profiles.
+   Our key contributions are:                                             Privilege Escalation: Attackers may exploit kernel vul-
+  • A hybrid profiling pipeline for syscall allowlist                  nerabilities, misconfigured Linux capabilities, or incomplete
+    generation.                                                        seccomp profiles to gain elevated privileges from within
+  • SyscallAD, a low-latency VAE + iForest anomaly                     a container [13], [14], [15]. Examples include the use of
+    detector.                                                          setuid(), clone(), or execve() in specific sequences
+  • Contextual risk scoring using MITRE ATT&CK and                     to hijack thread execution or bypass namespace restrictions.
+    CVE correlations.                                                     Container Escape: Exploits like CVE-2022-0847 (Dirty
+  • Fine-grained syscall enforcement using eBPF maps and               Pipe) or CVE-2019-5736 (Docker runc) allow malicious
+    LSM hooks.                                                         processes to bypass container boundaries and interact with
+  • Runtime feedback loop for policy auto-hardening based              the host. These often involve crafting malicious syscall
+    on violations.                                                     sequences that tamper with read-only memory or escape
+                                                                       namespace isolation [7], [16].
+   The paper is organized as follows: Section II covers
+                                                                          Attack Surface Abuse: Many containers have overly broad
+syscall filtering and eBPF fundamentals. Section III discusses
+                                                                       access to syscalls due to generic or default seccomp profiles.
+prior work. Section IV describes DeSFAM’s architecture.
+                                                                       This over-permissiveness can be abused by sophisticated
+Section V presents evaluation results, followed by discussion
+                                                                       adversaries to chain together syscalls into stealthy, multi-
+in Section VI and conclusion in Section VII.
+                                                                       stage attacks.
+II. BACKGROUND
+                                                                       C. LIMITATIONS OF TRADITIONAL MITIGATION
+Containerization has fundamentally transformed cloud-native
+                                                                       APPROACHES
+software deployment by offering lightweight, scalable, and
+                                                                       Security mechanisms such as AppArmor, SELinux, and
+portable execution environments. Unlike virtual machines
+                                                                       Seccomp provide syscall filtering and policy enforcement
+(VMs), which encapsulate a full operating system per
+instance, containers share the host’s OS kernel while provid-          [17], [18]. However, they exhibit several limitations in
+ing isolated user spaces via namespaces and control groups             modern cloud-native environments:
+(cgroups). This architecture reduces overhead and accelerates             • Static Policy Inflexibility: Static profiles do not adapt
+deployment, making containers ideal for microservices,                       to new behaviors or threat vectors, often resulting in
+CI/CD pipelines, and elastic workloads. However, this shared                 false positives (over-blocking) or false negatives (missed
+kernel model introduces unique security risks—particularly                   attacks).
+at the syscall interface, which governs access to core kernel             • Lack of Sequence Awareness: Rule-based systems oper-
+functionalities.                                                             ate on individual syscall invocations without considering
+                                                                             temporal dependencies, making them blind to multi-step
+A. SYSTEM CALL SECURITY IN SHARED-KERNEL                                     attacks.
+ENVIRONMENTS                                                              • Scalability Bottlenecks: As container density increases,
+
+Syscalls act as the primary interface between user-space                     static filters become harder to maintain and enforce
+applications and kernel resources. In containerized systems,                 efficiently at scale.
+                                                                          • Manual Configuration Overhead: Policies must be
+they are critical to process execution, file operations, memory
+management, and network communication. Unfortunately,                        manually written, tested, and maintained for each
+their broad capabilities also make them a prime target for                   container workload—an impractical burden in dynamic
+attackers. The kernel exposes hundreds of syscalls, many of                  environments.
+which are unnecessary for typical containerized workloads,                These shortcomings highlight the need for dynamic,
+thereby expanding the attack surface [8], [9], [10].                   intelligent, and context-aware syscall security solutions that
+   Attackers often exploit misused or vulnerable syscalls to           scale with modern infrastructure [19].
+execute privilege escalation, escape containers, or tamper
+with the host environment. Such threats are exacerbated in             D. THE PROMISE OF EBPF FOR SYSCALL MONITORING
+multi-tenant cloud deployments, where multiple containers              eBPF is a kernel-native technology that allows safe,
+share the same host kernel and thus the same syscall                   programmable instrumentation of kernel events, including
+
+139204                                                                                                                            VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+syscalls. It enables dynamic attachment of monitoring                              This integrated design enables real-time detection, con-
+and filtering logic directly at syscall entry points (e.g.,                     textual blocking, and long-term syscall surface reduction,
+sys_enter_*) with minimal overhead [20], [21], [22].                            setting the stage for resilient and scalable container security
+Key benefits of eBPF in the syscall security domain include:                    in shared-kernel environments.
+   • Real-Time Enforcement: Syscalls can be blocked or
+     audited instantly without context switches or restarts.                     III. RELATED WORK
+   • Context-Aware Filtering: Policies can account for
+                                                                                This section discusses state-of-the-art approaches categorized
+     namespaces, cgroup IDs, arguments, or syscall patterns.                    by filtering, anomaly detection, provenance tracking, and
+   • High Scalability: Efficient in-kernel maps and trace-
+                                                                                kernel-hardening, highlighting their strengths and limitations
+     points allow enforcement over thousands of containers                      compared to the DeSFAM framework. Table 1 summarizes
+     concurrently.                                                              recent syscall filtering and anomaly detection approaches,
+                                                                                highlighting their problem focus, limitations, and core
+   eBPF’s programmable nature makes it an ideal foundation                      techniques.
+for implementing fine-grained, real-time syscall security
+tailored to container workloads.                                                 A. SYSTEM CALL FILTERING APPROACHES
+                                                                                Confine [31] uses static analysis to construct restrictive
+E. SEQUENCE-BASED ANOMALY DETECTION FOR                                         seccomp profiles, achieving a 47.6% syscall reduc-
+SYSCALLS                                                                        tion rate (SRR). However, its static nature prevents
+Machine learning (ML) models, especially those analyzing                        adaptation to runtime behaviors, reducing effectiveness
+syscall sequences, provide a powerful complement to eBPF                        against evolving workloads. Similarly, C2C [33] and
+monitoring. Rather than relying solely on predefined rules,                     Prof-gen [36] rely on static techniques that either
+sequence-based models can learn patterns of normal behavior                     require manual configuration or omit dynamic trac-
+and flag anomalous syscall windows that deviate from                            ing, limiting scalability and robustness in real-world
+expected workflows [23], [24], [25].                                            deployments.
+   Variational Autoencoders (VAE) and Isolation Forests                            KubeRosy [29] and Optimus [27] incorporate eBPF
+(iForset) are particularly effective for modeling syscall                       for live syscall monitoring and runtime policy updates.
+sequences:                                                                      KubeRosy leverages Kubernetes CRDs for real-time policy
+   • VAEs reconstruct normal behavior from compressed                           refinement but remains tied to Kubernetes environments.
+     latent space representations. High reconstruction error                    Optimus employs association-based filtering to iteratively
+     indicates anomalies.                                                       adapt syscall profiles, yet its automation is constrained—it
+   • Isolation Forests identify statistical outliers based on                   requires operator approval for unmatched syscalls and halts
+     how easily a sequence can be separated from normal                         profile updates if association analysis fails. Prof-gen, while
+     patterns.                                                                  combining dynamic boot-time tracing with static call graph
+   • Ensembles of both improve robustness by combining                          analysis to generate minimal access lists without source code,
+     reconstruction-based and tree-based anomaly scoring.                       lacks support for capturing behavioral shifts during runtime
+                                                                                execution.
+   To support training and validation, public datasets such
+as the DongTing dataset offer syscall sequences labeled as
+                                                                                 B. ANOMALY-BASED INTRUSION DETECTION SYSTEMS
+normal or malicious. DeSFAM uses DongTing exclusively,
+                                                                                Machine learning-based techniques have been widely
+leveraging its 18,966 labeled sequences to train and calibrate
+                                                                                explored for syscall anomaly detection. The BoSC-
+its anomaly detection models [26].
+                                                                                based IDS [35] employs Bag-of-System Calls modeling
+                                                                                with classifiers like Random Forests, offering reason-
+F. TOWARD ADAPTIVE, SCALABLE SYSCALL SECURITY
+                                                                                able accuracy in small-scale environments. However,
+The dynamic nature of container orchestration demands                           frequent retraining requirements hinder scalability and
+syscall filtering mechanisms that adapt to workload behav-                      adaptability.
+iors, incorporate threat intelligence, and scale with minimal                      Lightweight models such as the TinyML-based Escape
+human intervention.                                                             Detector [30] target IoT and edge devices but fall short in
+   DeSFAM addresses these needs by combining:                                   handling complex attack vectors in high-performance cloud
+   • Hybrid static-dynamic syscall profiling.                                   systems due to limited adaptability and accuracy.
+   • Ensemble anomaly detection combining deep learning                            DeSFAM addresses these limitations in Phase 2 via a
+     (VAE) and tree-based models (iForest).                                     hybrid anomaly detector combining a Variational Autoen-
+   • Risk-based policy enforcement using eBPF LSM hooks.                        coder (VAE) with an Isolation Forest, trained on the
+   • CVE-matching and MITRE ATT&CK-based risk                                   DongTing dataset. This approach enables accurate, low-
+     scoring.                                                                   latency detection of zero-day attacks with no need for
+   • Auto-hardening mechanisms to refine seccomp profiles                       retraining, while supporting real-time sliding window
+     at runtime.                                                                inference.
+
+VOLUME 13, 2025                                                                                                                         139205
+                                                           S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+TABLE 1. Comparison of state-of-the-art container security solutions.
+
+
+
+
+C. PROVENANCE-BASED DETECTION APPROACHES                                          • Machine learning approaches require frequent retrain-
+Provenance-driven systems like PACED [34] monitor syscall                           ing, limiting scalability.
+relationships and causality across containers to detect cross-                    • Hardware dependencies (e.g., TEEs) restrict deployment
+namespace attacks. While effective, they suffer from high                           flexibility.
+overhead due to continuous graph construction and limited
+scalability.                                                                   F. DESFAM: ADVANCING THE STATE OF THE ART
+   DeSFAM circumvents this by embedding syscall context                        DeSFAM addresses key limitations of prior systems through
+(e.g., PID, namespace, timestamps) directly into model                         a unified, multi-phase architecture. It combines hybrid
+features, enabling behavioral awareness without the cost of                    syscall profiling, combining static binary disassembly with
+full provenance tracking.                                                      dynamic runtime tracing, to generate accurate syscall
+                                                                               access lists. Real-time enforcement is achieved via eBPF
+D. KERNEL-LEVEL SECURITY ENHANCEMENTS                                          probes and LSM hooks, enabling low-latency blocking
+Kernel-layer defenses such as Condo [32] use Trusted Execu-                    and policy updates without restarting containers. Anomaly
+tion Environments (TEEs) to safeguard permission integrity.                    detection is handled by SyscallAD, a hybrid model using
+Though secure, their reliance on specialized hardware and                      a Variational Autoencoder and Isolation Forest for pre-
+kernel modification makes them unsuitable for large-scale                      cise, retraining-free detection of known and zero-day
+cloud deployments.                                                             attacks. DeSFAM also incorporates CVE-aware filtering
+   In contrast, DeSFAM achieves portability and scalability                    and MITRE ATT& CK-based risk scoring to restrict vul-
+by utilizing eBPF maps and LSM hooks to enforce syscall                        nerable syscalls dynamically, and applies tiered response
+policies dynamically, without modifying the kernel or                          logic to enforce fine-grained actions based on threat
+depending on TEEs.                                                             severity. The framework operates without kernel modi-
+                                                                               fication or reliance on orchestration platforms, offering
+E. COMMON LIMITATIONS OF EXISTING APPROACHES                                   scalable and adaptive syscall security for modern container
+While there have been meaningful advances in syscall                           environments.
+minimization and container security, current solutions face
+several key limitations:                                                       IV. DESFAM: DYNAMIC EBPF-DRIVEN SYSCALL
+  • Static policies cannot adapt to evolving runtime                           FILTERING AND ANOMALY MITIGATION
+     behaviors.                                                                This section presents the design and implementation of the
+  • Lack of real-time enforcement allows syscall abuse                         proposed DeSFAM framework, detailing its architecture,
+     between updates.                                                          operational phases, and enforcement strategy.
+
+139206                                                                                                                                    VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+                           FIGURE 1. DeSFAM architecture showing the interaction between user-space syscall profiling,
+                           anomaly detection, and kernel-space enforcement using eBPF and seccomp for adaptive, real-time
+                           syscall control.
+
+
+
+
+A. OVERVIEW                                                                     retraining-dependent anomaly detectors. Traditional seccomp
+DeSFAM (Dynamic eBPF-Driven Syscall Filtering and                               profiles are either too permissive or brittle, failing to adapt
+Anomaly Mitigation) is a lightweight, real-time framework                       to evolving runtime behavior. DeSFAM overcomes this by
+designed to reduce the kernel attack surface and detect                         combining static and dynamic analysis, enabling accurate and
+anomalous syscall behavior in containerized environments.                       context-aware syscall profiling.
+It enforces least-privilege syscall usage to mitigate threats                      To ensure real-time enforcement without impacting con-
+such as privilege escalation, container escape, and syscall                     tainer availability, DeSFAM leverages eBPF probes and
+injection. Fig. 1 illustrates the architectural workflow of the                 LSM hooks, which operate entirely in kernel space and
+framework.                                                                      support dynamic policy updates with minimal latency. This
+   DeSFAM operates in three integrated phases:                                  design choice avoids the performance cost of continuous
+                                                                                provenance graph construction and eliminates the need for
+   • Hybrid Syscall access listing and Seccomp Profiling:
+                                                                                kernel modification or container restarts.
+     Combines static call graph extraction and dynamic eBPF
+                                                                                   For anomaly detection, DeSFAM adopts a hybrid model
+     tracing to construct a refined syscall access list, pruning
+                                                                                (VAE + Isolation Forest) that captures behavioral patterns
+     unnecessary and CVE-associated syscalls.
+                                                                                in syscall sequences while avoiding frequent retraining,
+   • Real-Time Monitoring and Anomaly Detection
+                                                                                supporting scalable and robust detection of zero-day attacks.
+     (SyscallAD): Traces runtime syscall sequences and
+                                                                                Unlike hardware-bound solutions such as TEEs, DeSFAM
+     analyzes them using a VAE + Isolation Forest ensemble
+                                                                                remains fully software-based and portable, ensuring compat-
+     to detect sequence-level anomalies, including malicious
+                                                                                ibility across a wide range of cloud-native deployments.
+     use of permitted syscalls.
+                                                                                   These considerations low overhead, adaptability, precision,
+   • Adaptive Enforcement and Policy Management:
+                                                                                and deployment readiness, form the foundation of the
+     Enforces blocking, rate-limiting, or logging of high-risk
+                                                                                DeSFAM architecture, which makes it suitable for real-world
+     syscalls using eBPF maps and LSM hooks, guided
+                                                                                container security at scale.
+     by risk scores from SyscallAD, without disrupting
+     container execution.
+   By integrating sequence-aware profiling, anomaly detec-                      C. PHASE 1: HYBRID SYSCALL ACCESS LISTING AND
+tion, and real-time enforcement, DeSFAM offers scalable,                        SECCOMP PROFILING
+adaptive protection suited for modern cloud-native container                    Container security hinges on precise syscall control, as con-
+deployments.                                                                    tainers share the host kernel and pose risks of unauthorized
+                                                                                kernel access. Phase 1 of DeSFAM mitigates this by
+B. DESIGN CONSIDERATIONS                                                        constructing a container-specific syscall access list through
+The design of DeSFAM is guided by the need to enforce                           a hybrid approach combining static analysis, dynamic
+syscall least privilege while addressing the limitations of                     profiling, and CVE-based threat intelligence to generate a
+static-only filtering, high-overhead provenance tracking, and                   minimal and accurate seccomp profile.
+
+VOLUME 13, 2025                                                                                                                         139207
+                                                         S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+                       FIGURE 2. DeSFAM Phase 1: Hybrid syscall access listing and seccomp profiling using static analysis,
+                       eBPF monitoring, and CVE-informed filtering to generate secure container-specific syscall policies.
+
+
+
+
+1) STATIC ANALYSIS                                                                  – wrk with 500-10,000 concurrent connections (stat-
+Static analysis begins by examining container images,                                  ic/dynamic content)
+including Dockerfiles, binaries, and linked libraries, without                      – ApacheBench simulating GET/POST requests at
+executing them. Using tools like objdump and readelf,                                  1K-10K req/sec
+ELF binaries are disassembled to extract low-level syscall                      • Databases (MySQL/Redis/MongoDB):
+instructions and libc wrapper functions.                                            – SysBench OLTP (Online Transaction Processing
+   To enhance coverage, a Static Call Graph (SCG) is                                   ) workloads (100-500 threads, 1M+ transactions)
+constructed using NetworkX to trace function-to-syscall                             – redis-benchmark at 1M ops/sec across com-
+mappings across the codebase. The resulting static syscall                             mand types
+set, Sstatic , captures all identifiable syscalls reachable from the                – Custom TPC-C-like transaction scripts with mixed
+code’s control flow.                                                                   read/write ratios
+  • Input: Container image (Dockerfile, ELF binaries)                           • Application runtimes (Node.js/Python):
+  • Tools: objdump, readelf, networkx                                               – Locust load tests simulating 50-500 concurrent
+  • Process: Disassemble ELF binaries, extract syscall paths
+                                                                                       user flows
+    via SCG traversal                                                               – Real-world dataset processing (GB-scale JSON/
+  • Output: Static syscall list (Sstatic )
+                                                                                       CSV parsing)
+   However, static analysis cannot detect syscalls invoked by                   These workloads cover 90th-percentile production traffic
+runtime-resolved libraries or JIT-compiled code. Thus, while                 patterns, container startup/shutdown sequences, dependency
+Sstatic offers a foundational syscall set, it must be refined                interactions (e.g., web−→DB transactions), and failure
+through dynamic analysis in subsequent phases.                               scenarios (timeouts, connection resets).
+                                                                                During execution, eBPF probes are attached to syscall
+2) DYNAMIC PROFILING: CAPTURING RUNTIME BEHAVIOR                             entry points (sys_enter_*) to trace syscall events. The
+To address the limitations of static analysis, DeSFAM                        collected metadata includes syscall IDs, process IDs, times-
+incorporates dynamic profiling by monitoring live syscall                    tamps, and namespace identifiers, offering detailed insights
+activity during container execution under standardized rep-                  into operational behavior.
+resentative workloads. This phase captures syscalls triggered                   • Input: Container instances under standardized work-
+by runtime conditions including dynamically loaded libraries,                     loads
+environment-specific logic, and dependency interactions,                        • Tools: eBPF via bcc/bpftrace with kernel-space tracing
+while ensuring comprehensive coverage of typical opera-                         • Process:
+tional behaviors.                                                                   1) Deploy containers with role-specific workload
+   Containers execute under role-specific workloads designed                            generators
+using industry-standard benchmarks that reflect real-world                          2) Attach eBPF probes to syscall entry/exit points
+operational profiles:                                                               3) Log metadata to ring buffers (perf_event_array)
+  •   Web servers (Nginx):                                                          4) Aggregate syscalls across 3 workload cycles
+
+139208                                                                                                                                  VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+   • Output: Dynamic syscall list (Sdynamic )                                       •Linux kernel syscall documentation;3
+  The resulting Sdynamic captures runtime-specific syscall                         • Community-maintained security rules from the Falco
+patterns, enriching the static access list while maintaining                         project;4
+operational realism. This standardized approach ensures                            • Empirical syscall traces collected during initial benign
+policy completeness without overfitting to edge cases.                               container executions using bpftrace for representative
+                                                                                     container workloads (e.g., nginx, redis, node.js).5
+3) THREAT INTELLIGENCE: CVE-BASED SYSCALL FILTERING                             This multi-source approach ensures that rarely invoked
+To enhance security awareness, DeSFAM integrates threat                         but necessary syscalls during container initialization or
+intelligence by incorporating CVE data from the National                        uncommon execution paths are incorporated into Stemplate
+Vulnerability Database (NVD). Using natural language                            while maintaining minimal syscall exposure.
+processing (NLP), we extract syscall names (e.g., ptrace,                          The CVE-based syscall set Sblocked is generated by extract-
+clone, execve) from CVE descriptions to build a list of                         ing exploit conditions, including kernel versions, device-
+high-risk syscalls, denoted as Sblocked .                                       specific vulnerabilities, or specific syscall argument patterns.
+   To construct Sblocked , we employ an NLP-based parsing                       This prevents overblocking syscalls that are only vulnerable
+engine that analyzes CVE reports retrieved from the NVD                         under specific configurations, not applicable to the con-
+via its REST API. A rule-based keyword extraction technique                     tainer’s                                                runtime
+is applied to identify syscall names mentioned in CVE                           environment.
+descriptions. We utilize a curated dictionary of Linux                             To resolve conflicts where CVE-listed syscalls are also
+syscall names derived from kernel source headers (e.g.,                         deemed essential (present in Stemplate ), DeSFAM adopts a
+unistd64.h) to ensure accurate mapping. Furthermore,                            hybrid security-functional policy, such syscalls are deliber-
+to avoid overblocking, contextual metadata such as kernel                       ately retained in Sfinal to preserve container functionality
+version applicability, affected subsystems, exploit conditions,                 but are continuously monitored and tightly controlled at
+and argument constraints (e.g., specific device file paths)                     runtime through DeSFAM’s adaptive enforcement phases.
+are extracted from the CVE text using pattern matching and                      The resulting access list Sfinal is compiled into a seccomp
+regular expression parsing. CVE entries not applicable to                       policy (seccomp_profile.json) enforced by the Linux
+the host kernel (based on vulnerable_configuration metadata                     kernel at runtime. Fig 2 and Algorithm 1 summarize this
+from the NVD API) are programmatically discarded to                             process.
+ensure threat relevance. This context-aware analysis allows
+us to differentiate between universally dangerous syscalls                      Algorithm 1 Enhanced Hybrid Syscall Profiling
+and those whose exploitability is limited to specific runtime                   Require: Container image, running instance, CVE database
+conditions not present in the target container environment.                     Ensure: Secure, functional syscall access list
+   • Input: CVE entries with syscall mentions                                    1: Extract syscalls via static analysis → Sstatic
+   • Mapping: Rule-based syscall extraction + context filter-                    2: Profile runtime under workload (dynamic profiling) →
+      ing                                                                           Sdynamic
+   • Output: Blocked syscall list (Sblocked )                                    3: Parse CVEs with contextual analysis → Sblocked             
+                                                                                 4: Generate Sfinal      =    (Sstatic ∪ Sdynamic ) ∩ Stemplate \
+   This set is excluded from the union of static and dynamic                                              
+syscall sets, ensuring vulnerable syscalls are omitted, even if                      Sblocked \ Stemplate
+                                                                                 5: return Sfinal
+observed during profiling, thus aligning access list generation
+with real-world exploitability.
+
+4) FINAL ACCESS LIST SYNTHESIS AND POLICY                                       5) CONTAINER-SPECIFIC POLICY UPLOAD
+GENERATION                                                                      DeSFAM          dynamically       loads      container-specific
+The final access list Sfinal is computed as:                                    syscall     policies    using    policy_loader.           Each
+                                                                              policy reflects the container’s behavioral profile from
+Sfinal = (Sstatic ∪ Sdynamic ) ∩ Stemplate \ Sblocked \ Stemplate               prior analysis and is written into the pinned eBPF
+                                                              (1)               map at /sys/fs/bpf/blocked_syscalls. Namespace
+                                                                                identifiers serve as keys for container isolation.
+  Here, Stemplate defines role-specific expected syscall
+                                                                                   This design enforces least-privilege syscall access per
+behavior for the container (e.g., web server, database, GPU
+                                                                                container at runtime, without restarting instances. Fig 3
+workload), serving as a functional boundary. The template
+                                                                                shows the upload pipeline and the population of the Syscall
+syscalls are derived by combining several sources:
+                                                                                map.
+  • Official Docker default seccomp profiles;1,2
+                                                                                   3 https://www.kernel.org/doc/html/latest/userspace-api/index.html
+  1 https://docs.docker.com/engine/security/seccomp/                               4 https://github.com/falcosecurity/rules
+  2 https://github.com/moby/moby/blob/master/profiles/seccomp/                    5 https://github.com/containers/common/blob/main/pkg/
+default.json                                                                    seccomp/seccomp.json
+
+VOLUME 13, 2025                                                                                                                                        139209
+                                                          S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+FIGURE 3. DeSFAM Phase 3: (a) Dynamic upload of container-specific syscall policies using policy_loader; (b) Verification of blocked syscalls in the
+pinned eBPF map using bpftool.
+
+
+
+
+                   FIGURE 4. DeSFAM Phase 2: Real-time syscall monitoring and anomaly detection using a hybrid VAE + iForest
+                   model. The offline module is trained on DongTing sequences, while the online module processes live syscalls via
+                   eBPF for anomaly evaluation and policy escalation.
+
+
+D. PHASE 2: REAL-TIME MONITORING AND SYSCALL                                     • 6,850 benign sequences: Captured from normal work-
+ANOMALY DETECTION (SYSCALLAD)                                                      loads such as web servers and databases executing file
+Phase 2 of DeSFAM introduces SyscallAD, a real-time                                I/O (open, read) and memory operations (mmap,
+anomaly detection module that combines deep learning and                           futex).
+ensemble methods to identify both known and zero-day                             • 12,116 malicious sequences: Generated through simu-
+threats in containerized environments. It monitors syscall                         lated attacks, including privilege escalation (setuid),
+sequences using eBPF and detects behavioral deviations                             filesystem tampering (unlink), and network intrusion
+linked to privilege escalation, container escape, or syscall                       (socket).
+injection.
+                                                                                 Each sequence includes syscall IDs, timestamps, and
+   SyscallAD employs a hybrid ensemble comprising a
+                                                                              contextual metadata (e.g., process IDs, namespaces), pro-
+Variational Autoencoder (VAE), which learns latent rep-
+                                                                              viding the contextual granularity required for sequence-level
+resentations of benign syscall patterns, and an Isolation
+                                                                              modeling. To improve learning reliability, the dataset was
+Forest (iForest), which identifies statistical outliers. This
+                                                                              cleaned to remove corrupted or incomplete traces and
+combination enables robust, low-latency detection with
+                                                                              normalized to reduce noise.
+minimal false positives and overhead.
+                                                                                 Given the inherent class imbalance, more malicious
+1) THE DONGTING DATASET: BEHAVIORAL BASELINES FOR                             sequences than benign, sampling techniques were applied to
+DETECTION                                                                     prevent model bias. This preprocessing ensures a balanced
+SyscallAD is trained on the DongTing dataset, which                           and      high-quality    training     set,     capable     of
+comprises 18,966 syscall sequences and over 2.6 million                       generalizing to real-world scenarios, including zero-
+individual syscalls collected from containerized applications.                day attacks and known exploits such as Dirty COW
+The dataset is split into:                                                    (CVE-2016-5195).
+
+
+
+139210                                                                                                                                   VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+2) PREFIXSPAN PATTERN MINING: EXTRACTING TRUSTED
+SYSCALL TEMPLATES
+To reduce false positives and improve detection efficiency,
+DeSFAM integrates PrefixSpan—a sequential pattern mining
+algorithm—on the benign subset of the DongTing dataset.
+This identifies frequent syscall subsequences that represent
+legitimate container behavior.
+   The resulting Benign Pattern Database is used to:
+   • Match incoming syscall windows against known-good
+                                                                                FIGURE 5. SyscallAD output from DeSFAM Phase 2: normal behavior in
+      patterns for early benign classification.                                 test-mysql contrasted with anomalous syscall detections in
+   • Bypass deep anomaly scoring for matched sequences,                         test-redis (e.g., clone, ioctl).
+      reducing computational overhead.
+   • Provide semantic traceability for security decisions.
+   Incorporating PrefixSpan enhances the interpretability and                   statistical outliers. While the VAE models nonlinear sequence
+efficiency of SyscallAD by enabling lightweight filtering of                    structures and latent dependencies, iForest excels at isolating
+known benign activity.                                                          statistically rare inputs. This hybrid approach enhances
+                                                                                generalization to unseen (zero-day) behaviors and reduces
+3) FEATURE ENGINEERING: STRUCTURING SYSCALL                                     false positives.
+SEQUENCES FOR DETECTION
+SyscallAD applies multi-dimensional feature engineering to                       a: OPTIMIZED VARIATIONAL AUTOENCODER (VAE)
+convert raw syscall streams into actionable model inputs:                       The VAE employs an encoder-decoder architecture (32 −→
+   • Sliding Windows: Syscalls are segmented into over-
+                                                                                8 −→ 32 neurons) with SELU activations, dropout (p = 0.2),
+     lapping windows (length 15, stride 3), capturing both                      and L2 regularization. It learns to reconstruct benign syscall
+     short-term anomalies and extended behavior patterns.                       windows by minimizing Mean Squared Reconstruction Error
+   • Categorical Frequencies: Syscalls are mapped to func-
+                                                                                (MSRE). Anomalies are flagged when MSRE exceeds the
+     tional categories (e.g., file I/O, memory, network),                       99.5th percentile of benign training errors.
+     and their frequency per window forms a behavioral
+     signature.                                                                  b: ISOLATION FOREST (iForest)
+   • Temporal Features: Inter-syscall time intervals (tempo-                    iForest isolates anomalies through recursive partitioning.
+     ral deltas) are summarized (mean, std, max) to detect                      Rare syscall sequences yield shallower isolation trees and
+     abnormal timing behaviors.                                                 higher anomaly scores. A contamination parameter of 2%
+   • Access list Pattern Matching: Each window is                               controls sensitivity, allowing detection of statistically rare
+     cross-checked against benign patterns from PrefixSpan;                     behaviors missed by VAE.
+     matches increase confidence in benign classification,                         Together, the VAE and iForest provide complementary
+     reducing false positives.                                                  detection capabilities, ensuring robust and efficient iden-
+   • Data Augmentation: Malicious sequences are syn-                            tification of both known and unknown syscall threats in
+     thetically modified (e.g., insertion or permutation of                     real-time.
+     high-risk syscalls like clone, setuid) to simulate
+     zero-day scenarios, improving model robustness.                             c: ENSEMBLE FUSION STRATEGY
+  This feature pipeline ensures high-fidelity inputs for                        SyscallAD combines the strengths of VAE and Isolation
+the VAE + Isolation Forest ensemble, enabling accurate,                         Forest through a weighted score fusion mechanism to
+scalable, and semantically aware anomaly detection in                           enhance anomaly detection accuracy.
+containerized environments.                                                       Each syscall window Wi is evaluated by both models:
+                                                                                  • AVAE (Wi ): Anomaly score based on Mean Squared
+4) SYSCALLAD: HYBRID DEEP LEARNING AND ANOMALY                                      Reconstruction Error.
+DETECTION ENGINE                                                                  • AiForest (Wi ): Score derived from isolation depth in the
+
+SyscallAD is a hybrid anomaly detection module designed                             Isolation Forest.
+to identify behavioral deviations in syscall sequences with                       The final score is computed as:
+high precision and adaptability. Unlike traditional point-wise
+                                                                                         A(Wi ) = α · AVAE (Wi ) + (1 − α) · AiForest (Wi )      (2)
+models, SyscallAD combines deep representation learning
+and statistical outlier detection to capture both complex                       where α = 0.7 prioritizes the VAE’s contribution.
+semantic patterns and rare anomalies.                                              The choice of α = 0.7 was validated via sensitivity analy-
+   The system integrates a Variational Autoencoder (VAE)                        sis over multiple values (α ∈ {0.0, 0.25, 0.5, 0.7, 0.85, 1.0}),
+for learning compact latent representations of benign syscall                   using the DongTing dataset. As shown in Fig 6, this setting
+behavior and an Isolation Forest (iForest) for detecting                        consistently yielded the best F1-Score and AUC, confirming
+
+VOLUME 13, 2025                                                                                                                               139211
+                                                           S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+                                                                               FIGURE 7. Real-time eBPF syscall log for kubepro-mysql-1, showing
+                                                                               timestamped syscall events with PID, container name, user, and return
+                                                                               value.
+
+FIGURE 6. Sensitivity analysis of fusion weight α on F1-Score and AUC.
+Peak performance is observed at α = 0.7.
+                                                                               5) REAL-TIME MONITORING WITH EBPF: LOW-OVERHEAD
+                                                                               CONTAINER-AWARE SYSCALL CAPTURE
+                                                                               DeSFAM        utilizes    eBPF      tracepoints    to   enable
+it as the optimal trade-off between structural learning and
+                                                                               fine-grained,       low-overhead       syscall     surveillance
+statistical outlier detection.
+                                                                               directly at the Linux kernel level. The BPF pro-
+   Fig 5 presents the anomaly logs from test-mysql and
+                                                                               gram hooks into (raw\_syscalls:sys\_enter) and
+test-redis containers. Benign syscalls such as futex,
+                                                                               (raw\_syscalls:sys\_exit), enabling the interception
+epoll_wait, and wait4 are correctly classified, while
+                                                                               of syscall invocations at their entry and exit points.
+anomalies like clone and ioctl, indicative of escape
+                                                                                  To isolate syscall activity from containerized workloads,
+or privilege escalation attempts, are effectively flagged.
+                                                                               DeSFAM dynamically maps container PIDs by querying
+These results demonstrate SyscallAD’s ability to distinguish
+                                                                               the Docker runtime and injecting them into a pid_map
+benign from malicious behavior across varied container
+                                                                               BPF hash table. Only syscalls originating from these PIDs
+workloads.
+                                                                               are recorded, ensuring container-specific tracing without
+                                                                               unnecessary system noise.
+d: DYNAMIC THRESHOLDING: ADAPTIVE ANOMALY
+                                                                                  Fig 7 captured syscall events are enriched with contextual
+BOUNDARY ADJUSTMENT
+                                                                               metadata including:
+To accommodate evolving syscall behavior, SyscallAD
+                                                                                  • syscall ID,
+employs dynamic thresholding based on an Exponen-
+                                                                                  • timestamp (nanosecond resolution),
+tial Moving Average (EMA), rather than a fixed cut-
+                                                                                  • process and parent PIDs,
+off. The initial threshold T0 is set to the 99.5th per-
+                                                                                  • command name,
+centile of VAE reconstruction errors on benign vali-
+                                                                                  • container name (mapped in user space),
+dation data, allowing tolerance for rare but legitimate
+                                                                                  • syscall return value.
+variations.
+   During runtime, the threshold is updated after each syscall                    These are sent from kernel to user space via a
+window Wi as:                                                                  ring_buffer and logged to per-container files in JSON
+                                                                               format. Simultaneously, syscall IDs are appended to a rolling
+            Tt+1 = max(Tmin , βTt + (1 − β)A(Wi ))                   (3)       deque (sliding window of size 15) in memory for each
+                                                                               container. Once a full window is formed, the syscall sequence
+where β = 0.9 controls update sensitivity, Tmin =                              is flushed to a structured .log file for downstream anomaly
+0.5 enforces a lower bound, and A(Wi ) is the ensemble                         detection.
+anomaly score.                                                                    This modular and container-aware monitoring mechanism
+  This adaptive strategy:                                                      ensures efficient syscall logging with negligible system
+  • Suppresses false positives from benign behavioral drift.                   overhead, supports live trace-to-sequence conversion, forms
+  • Maintains sensitivity to true anomalies and covert                         the input foundation for SyscallAD’s feature extraction and
+    attacks.                                                                   anomaly detection.
+  Final detection is defined as:
+                          (                                                    6) DevOps INTEGRATION: CONTINUOUS MODEL
+                            1, if A(Wi ) > T                                   REFINEMENT
+             Flag(Wi ) =                                (4)
+                            0, otherwise                                       To mitigate false positives and adapt to evolving workloads,
+                                                                               DeSFAM integrates a DevOps-driven feedback loop within
+  By continuously adjusting its decision boundary,                             Phase 2 (SyscallAD). Anomalous syscall sequences, along
+SyscallAD improves robustness and precision in dynamic                         with metadata (e.g., container name, PID, timestamp), are
+container environments.                                                        logged and visualized for analyst review. Security teams can
+
+139212                                                                                                                                    VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+TABLE 2. Example Syscall-to-MITRE ATT&CK technique mapping.
+
+
+
+
+Algorithm 2 Real-Time Syscall Anomaly Detection                                    The VAE and iForest models independently score each
+(SyscallAD)                                                                     window; their outputs are fused using a weighted scheme.
+Require: eBPF hook, trained VAE and iForest models,                             If the combined score exceeds a dynamic threshold T
+     validation reconstruction errors Eval                                      (initialized at the 99.5th percentile of benign reconstruc-
+Ensure: Anomaly flag for each syscall window                                    tion errors), the sequence is flagged and escalated to
+  1: Initialize sliding windows Wi ← ∅ for i ∈ {5, 10, 15}                      Phase 3. Otherwise, T is updated using an Exponential
+  2: Load trained VAE and iForest models                                        Moving Average (EMA) to adapt to benign behavioral
+  3: Compute T0 ← percentile(Eval , 99.5) {Set initial                          drift.
+     threshold using 99.5% of benign validation errors}                            By combining real-time detection, adaptive thresholding,
+  4: Set threshold T ← T0                                                       and continuous DevOps feedback, SyscallAD maintains high
+  5: while syscall stream is active do                                          anomaly detection accuracy while minimizing false alarms in
+  6:    Capture syscall st at time t                                            dynamic container environments.
+  7:    Append st to each Wi
+  8:    for each full window Wi do                                              E. PHASE 3: ADAPTIVE SYSCALL ENFORCEMENT AND
+  9:       fi ← extract_features(Wi )                                           POLICY MANAGEMENT
+ 10:       AVAE ← VAE_score(fi )                                                Adaptive Syscall Enforcement is the third phase of
+ 11:       AiForest ← iForest_score(fi )                                        the DeSFAM framework. It focuses on dynamically
+ 12:       A(Wi ) ← 0.7 · AVAE + 0.3 · AiForest                                 enforcing syscall policies in containerized environments
+ 13:       if A(Wi ) > T then                                                   in real time. This phase integrates risk scoring, contex-
+ 14:          Flag Wi as anomalous; escalate to Phase 3                         tual analysis, and external threat intelligence to deliver
+ 15:       else                                                                 adaptive and precise security responses to minimize
+ 16:          T ← max(Tmin , β · T + (1 − β) · A(Wi ))                          syscall abuse in containerized environments with minimal
+ 17:       end if                                                               overhead.
+ 18:       Slide Wi forward
+ 19:    end for                                                                 1) RISK SCORING MECHANISM
+ 20: end while
+                                                                                DeSFAM quantifies the threat level of each anomalous
+                                                                                syscall sequence Wi using a composite risk score derived
+                                                                                from three components:
+annotate detections as true or false positives, with validated
+false positives appended to the benign training set.                             a: MITRE ATT&CK MAPPING
+   SyscallAD periodically retrains its VAE + iForest ensem-                     Each syscall in Wi is mapped to associated adversarial
+ble on this augmented dataset, enabling it to learn new benign                  techniques (e.g., T1055 for ptrace) based on a predefined
+variations introduced by environment-specific workloads or                      lookup (Table 2). This contextual mapping enables reasoning
+edge cases. This iterative refinement enhances detection                        beyond isolated calls to recognize high-level attack patterns.
+precision and model generalization over time.
+   The full detection workflow is formalized in Algorithm 2.                     b: CUMULATIVE SEVERITY
+Syscalls are segmented into sliding windows of multiple                         The cumulative severity score aggregates the individual
+lengths (e.g., 5, 10, 15) to balance latency and context                        severity scores of syscalls in the sequence:
+depth. Each window is transformed into a feature vector                                                              X
+incorporating categorical frequency, timing metrics, and                                   Cumulative Severity =        Severity(t) (5)
+access list matches.                                                                                               t∈Wi
+
+VOLUME 13, 2025                                                                                                                        139213
+                                                         S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+TABLE 3. Example risk scores for benign and malicious sequences.              ‘‘enforce_policy’’);
+                                                                             struct bpf_link *link = bpf_program_
+                                                                             attach_lsm(prog);
+                                                                               This enables interception of all syscalls during entry
+                                                                             execution. The hook function signature:
+                                                                             SEC(‘‘lsm/syscall’’)
+                                                                             int BPF_PROG(enforce_policy, int syscall_num,
+                                                                             struct pt_regs *regs) {
+                                                                             // Enforcement logic here
+                                                                             }
+c: EXPLOIT PATTERN MATCHING                                                  Kernel integration ensures all containerized processes are
+Each sequence Wi is evaluated against known CVE exploit                      monitored regardless of their namespace context.
+signatures. If a match is found, an additional risk penalty is
+applied:                                                                     b: POLICY MAP STRUCTURE
+                               (                                             Syscall actions are stored in a hash-based eBPF map indexed
+                                 1, if matched                               by container identifiers:
+          I(Exploit Match) =                               (6)
+                                 0, otherwise                                struct container_key {
+                                                                             u32 mntns; // Mount namespace ID u32 pidns;
+d: FINAL RISK SCORE                                                          // PID namespace ID
+The final risk score integrates both severity and exploit                    };
+intelligence:
+                                                                             struct bpf_map_def SEC(‘‘maps’’) policy_map =
+                                                                              {.type = BPF_MAP_TYPE_HASH,.key_size =
+                X
+   Risk Score =     Severity(t) + 5 · I(Exploit Match) (7)
+                                                                              sizeof(struct container_key),.value_size =
+                   t∈Wi                                                         sizeof(u64),.max_entries = 144,
+  This multi-dimensional scoring framework enables precise                   };
+and context-aware enforcement by combining behavioral                           The map is pinned at /sys/fs/bpf/blocked_syscalls
+analysis with real-world threat intelligence.                                for runtime updates via policy_loader.
+
+e: POLICY DECISION LOGIC                                                     c: SYSCALL BLOCKING MECHANISM
+Based on the computed risk score, DeSFAM applies a                           The actual blocking of syscalls occurs within the eBPF hook
+three-tier enforcement strategy:                                             attached to the security_syscall LSM. When a monitored
+                                                                            syscall is invoked, the enforce_policy() function is trig-
+               Block,
+                             if Risk Score ≥ 8                              gered, and the critical enforcement primitive uses kernel func-
+   Action = Rate-limit, if 5 ≤ Risk Score < 8   (8)                          tion override: bpf_override_return(regs, -EPERM);
+                              if Risk Score < 5
+              
+              
+                 Log,                                                        // Immediate syscall denial
+                                                                                 This workflow implements blocking:
+   These thresholds are empirically tuned and remain config-
+                                                                                 • Retrieve container context:
+urable for deployment-specific risk postures. Table 3 presents
+sample sequences and corresponding actions.                                         u32 mntns = bpf_get_ns_id(NS_MNT);
+                                                                                    u32 pidns = bpf_get_ns_id(NS_PID);
+   This mechanism enables real-time, context-aware enforce-
+ment that adapts to both benign variations and high-risk attack                 •   Query policy map:
+signatures.                                                                         u64 *action = bpf_map_lookup_elem
+                                                                                    (&policy_map, &key);
+2) eBPF-BASED ENFORCEMENT                                                       •   Enforce action:
+DeSFAM enforces syscall policies through eBPF programs                               – BLOCK: Deny              via     bpf_override_return
+attached to LSM hooks. Specifically, these programs are                                  (regs, -EPERM);
+loaded and attached using bpf_program_attach_lsm();                                  – RATE_LIMIT: Allow N invocations/minute via
+to intercept system calls at the LSM’s security_syscall                                 atomic counters
+hook. This allows DeSFAM to observe and act on all syscalls                          – LOG: Record metadata via ring buffer
+issued by containerized processes.                                                  Syscalls not in the map are permitted.
+
+a: LSM HOOK ATTACHMENT                                                       d: SELF-HEALING ACCESS LIST VIA SECCOMP
+eBPF programs are dynamically attached to the secu-                          REGENERATION
+rity_syscall LSM hook using bpf_attach_lsm():                                To ensure long-term policy evolution, DeSFAM incorporates
+// eBPF Hook Attachment struct bpf_program                                   a self-healing mechanism that automatically refines static
+*prog = bpf_object__find_program_by_name(obj,                                syscall access lists based on repeated runtime blocks.
+
+139214                                                                                                                                  VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+struct probation_key {
+struct container_key ckey;
+u32 syscall; // Syscall number
+};
+
+SEC(‘‘maps’’) struct bpf_map_def probation_
+map = {.type = BPF_MAP_TYPE_LRU_HASH,.
+key_size = sizeof(struct probation_key),.
+value_size = sizeof(u32), // Block counter.
+max_entries = 512,
+};
+
+  Blocked syscalls are tracked in-kernel using a Least
+Recently Used (LRU) cache map called probation_map,
+indexed by the tuple (mntns, pidns, syscall),
+abstracted in the struct probation_key.
+  If a syscall is blocked three or more times within
+a configurable window and is not previously annotated
+as benign, the kernel triggers a user-space daemon via
+bpf_send_signal(SIGUSR1);.
+  This daemon then:
+   • Resolves the syscall name using its number (e.g., 105
+     −→ setuid)
+   • Locates and updates the corresponding container’s
+     seccomp profile
+   • Removes the flagged syscall from the access list
+   • Reapplies the updated profile to future container
+     instances
+  This adaptive defense loop ensures that newly deployed
+containers inherit hardened, exploit-aware syscall policies
+without requiring restarts or manual review.
+
+e: FORMAL POLICY MODEL
+Let S be the set of valid syscalls, and M , N represent mount                   FIGURE 8. DeSFAM Phase 3 – Adaptive enforcement pipeline. Anomalous
+and PID namespaces. The enforcement policy is defined as:                       syscall sequences from Phase 2 are intercepted and acted upon via eBPF
+                                                                                and LSM hooks.
+
+            P : S × M × N → {0, 1}                                     (9)
+                 (
+                   Allow, if P(s, mntns, pidns) = 1
+   Decision(s) =
+                   Block, otherwise
+                                                                                3) USE CASE: PRIVILEGE ESCALATION ATTEMPT AND
+                                                                     (10)       REAL-WORLD CVE DEFENSE
+                                                                                Consider a container running under DeSFAM’s restrictive
+  This container-aware logic ensures syscall isolation and                      policy designed to block privilege escalation attempts. A typi-
+enforces least-privilege access per namespace. The combined                     cal attack sequence—clone(), setuid(), execve()—
+use of eBPF tracepoints and LSM hooks enables fast, layered                     is intercepted at the kernel level.
+enforcement with minimal overhead.                                                 Assume the process operates in mount namespace mntns
+                                                                                = 1001 and PID namespace pidns = 2001. Upon invo-
+f: ALGORITHM: ADAPTIVE SYSCALL ENFORCEMENT                                      cation of setuid(), DeSFAM consults its per-container
+The enforcement procedure in Phase 3 is formalized through                      policy:
+Algorithm 3, which provides a structured and replicable                            policy_map[1001, 2001] = [..., 1, 0, 1,
+workflow for translating risk assessments into real-time                        ...],
+syscall policy updates. It encapsulates the integration of risk                    where each entry denotes the action for a syscall ID (0 =
+scoring, exploit pattern matching, and runtime enforcement                      BLOCK, 1 = ALLOW). Since setuid() is mapped to 0,
+using eBPF and LSM hooks. This algorithm serves as                              the syscall is denied.
+an implementation blueprint for the DeSFAM framework’s                             The eBPF LSM hook, realtime_blocking, enforces this
+adaptive defense layer, supporting both reproducibility and                     decision in the kernel, returning -EPERM and logging
+rigorous validation.                                                            the event for auditing. This ensures immediate, in-kernel
+
+VOLUME 13, 2025                                                                                                                               139215
+                                                  S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+Algorithm 3 Adaptive Syscall Enforcement With Auto-                   1) INFRASTRUCTURE
+Hardening                                                             The testbed featured a 16-core CPU, 64 GB RAM, NVIDIA
+Require: Anomalous sequence Wi , MITRE mapping,                       A100 80 GB GPU, and a 512 GB NVMe SSD. This
+    exploit database, container context (mntns, pidns), eBPF          configuration enabled real-time syscall filtering, anomaly
+    map policy_map                                                    detection, and policy adaptation with negligible latency,
+Ensure: Enforcement action: ‘‘Block’’, ‘‘Rate-limit’’,                supporting concurrent container workloads.
+    or ‘‘Log’’
+ 1: Initialize Risk_Score ← 0                                         2) CONTAINER WORKLOADS
+ 2: for each syscall t in Wi do                                       We evaluated DeSFAM on six diverse containers: Nginx,
+ 3:    Risk_Score ← Risk_Score + Severity(t)                          MySQL, Redis, Node.js, Python, and MongoDB—spanning
+ 4: end for                                                           web serving, data storage, and script execution—covering
+ 5: if Wi matches an exploit in the database then                     a wide syscall spectrum including I/O, memory, and
+ 6:    Risk_Score ← Risk_Score + 5                                    networking.
+ 7: end if
+ 8: if Risk_Score ≥ 8 then                                            3) WORKLOAD GENERATION
+ 9:    action ← ‘‘Block’’                                             Containers were subjected to realistic operational stress using
+10: else if 5 ≤ Risk_Score < 8 then
+                                                                      tools like wrk, ApacheBench, redis-benchmark, and
+11:    action ← ‘‘Rate-limit’’                                        custom Python scripts, generating routine traffic patterns for
+12: else
+                                                                      profiling and validation.
+13:    action ← ‘‘Log’’
+14: end if
+                                                                      4) ATTACK SIMULATION
+15: for each syscall t in Wi do
+                                                                      To test DeSFAM’s threat resilience, we injected known
+16:    Update policy_map[(t, mntns, pidns)] ← action
+                                                                      CVEs—CVE-2021-4034 (Polkit), CVE-2022-0847 (Dirty
+17:    Enforce action on t via eBPF
+                                                                      Pipe), and CVE-2017-5123 (waitid exploit)—into live
+18:    Log event (t, action, mntns, pidns)
+                                                                      containers. These exploits triggered syscall chains rep-
+19: end for
+                                                                      resentative of privilege escalation and container escape
+20: if action = "Block" then
+                                                                      attempts.
+21:    for each syscall t in Wi do
+22:       probation_count[t] ← probation_count[t] + 1
+                                                                      5) BASELINE COMPARISONS
+23:       if probation_count[t] ≥ 3 and t not annotated as
+          benign then                                                 We benchmarked DeSFAM against Confine [31], Prof-gen
+24:          Trigger seccomp access list update for syscall t         [36], NIMOS, Optimus [27], and KubeRosy [29]. Each base-
+25:       end if                                                      line was reimplemented following its original configuration
+26:    end for                                                        and integrated with Docker/Kubernetes for parity in runtime
+27: end if
+                                                                      enforcement and syscall profiling capabilities.
+28: return action
+                                                                      B. EVALUATION METRICS
+                                                                      We employ a comprehensive set of metrics to eval-
+mitigation of exploit attempts without requiring container            uate DeSFAM’s effectiveness in syscall minimization,
+restarts or user-space intervention.                                  anomaly detection accuracy, enforcement responsiveness,
+                                                                      and system efficiency. These metrics highlight both
+V. EXPERIMENT EVALUATION AND RESULTS                                  security strength and runtime viability in containerized
+This section evaluates the DeSFAM framework in terms of               environments.
+syscall-level enforcement accuracy, performance overhead,
+reduction rate, and scalability in containerized environments.        1) SYSCALL REDUCTION RATE (SRR)
+Experiments were conducted using real-world workloads                 SRR quantifies DeSFAM’s ability to reduce kernel exposure
+and attack scenarios to assess DeSFAM’s effectiveness and             by minimizing allowed syscalls. Calculated as:
+runtime efficiency. Metrics are compared against leading                       
+                                                                                        |DeSFAM Access List|
+                                                                                                                   
+frameworks under controlled conditions to ensure fairness               SRR = 1 −                                    × 100 (11)
+and reproducibility. Results highlight DeSFAM’s security                             |Docker Default Access List|
+impact and operational feasibility in practical deployments.            Docker’s default allows 414 syscalls. DeSFAM’s hybrid
+                                                                      profiling (static, dynamic, CVE-informed) yields container-
+A. EXPERIMENTAL SETUP                                                 specific access lists, achieving higher SRRs than static-only
+To assess the effectiveness, adaptability, and efficiency of          (Confine, Prof-gen) or dynamic-only (NIMOS) methods.
+DeSFAM, we deployed the complete framework on a high-                 Unlike Optimus and KubeRosy, which focus on behavioral
+performance bare-metal server running Ubuntu 24.04 LTS.               enforcement, DeSFAM emphasizes minimal exposure.
+
+139216                                                                                                                           VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+2) ANOMALY DETECTION PERFORMANCE
+We assess SyscallAD’s accuracy using:
+   • Recall (TPR) – Proportion of attacks correctly identified
+   • Precision – Fraction of flagged sequences that are actual
+     threats
+   • F1-Score, AUC, and Average Precision (AP) – Robust-
+     ness in imbalanced data
+   DeSFAM’s VAE + iForest ensemble outperforms
+LSTM-only detection (e.g., NIMOS), with improved preci-
+sion and reduced false positives.
+                                                                                FIGURE 9. Syscall Access List Size and Reduction Rate Comparison.
+3) ATTACK DETECTION LATENCY
+This measures the time (in µs) between malicious syscall
+execution and enforcement. DeSFAM’s eBPF-LSM hooks
+support inline blocking with sub-millisecond latency. Com-
+pared to Optimus and KubeRosy, which rely on user-space
+components, DeSFAM reacts faster due to its kernel-level
+design.
+
+4) ENFORCEMENT OVERHEAD
+We evaluate:
+  • Average CPU usage (%)
+  • Memory consumption (MB)
+                                                                                FIGURE 10. Syscall reduction rate comparison.
+  • Syscall processing latency (µs)
+  DeSFAM achieves minimal overhead via in-kernel eBPF
+                                                                                TABLE 4. Syscall reduction rate (SRR) comparison.
+maps. Unlike static-only (Confine, Prof-gen) or user-space-
+heavy (NIMOS, Optimus) solutions, it balances real-time
+enforcement with performance efficiency.
+
+5) ADAPTABILITY AND COMPARISON METRICS
+To assess dynamic policy adaptation, we measured:
+   • Rule update latency via SyscallAD or CVE triggers
+     (in µs)
+   • Uptime impact (zero downtime observed)
+                                                                                seccomp profile allows 414 syscalls, many of which
+   None of the baseline systems—Confine, Prof-gen,                              are unnecessary and potentially exploitable. DeSFAM
+NIMOS, Optimus, or KubeRosy—support real-time policy                            employs hybrid reduction—static analysis, dynamic pro-
+self-hardening. For holistic comparison, we evaluate:                           filing, and CVE-informed filtering—to generate container-
+   • Access list size and SRR
+                                                                                specific access lists.
+   • Attack mitigation success rate
+                                                                                   DeSFAM achieves an average SRR of 78.60%—the
+   • Failure-free execution for benign workloads
+                                                                                highest among all frameworks—while preserving full con-
+   • Average FPR and enforcement latency
+                                                                                tainer functionality. Fig 10 and Table 4 illustrate this
+C. COMPARATIVE RESULTS                                                          improvement across all test containers. The SRR is calculated
+                                                                                as:
+We compare DeSFAM against five state-of-the-art syscall fil-                                                             
+tering frameworks—Confine [31], Prof-gen [36], NIMOS [38],                                               Access List Size
+                                                                                           SRR = 1 −                         × 100       (12)
+Optimus [27], and KubeRosy [29]—using metrics such as                                                          414
+syscall reduction rate (SRR), enforcement stability, attack
+prevention, and runtime performance. The evaluation spans                       2) FUNCTIONAL STABILITY
+six diverse container workloads: Nginx, MySQL, Redis,                           All containers operated without crashes or denials under
+Node.js, Python, and MongoDB.                                                   DeSFAM-enforced profiles. HTTP, transaction, and memory
+                                                                                operations completed successfully across all workloads.
+1) SYSCALL REDUCTION RATE (SRR) COMPARISON                                      In contrast, Confine and Prof-gen occasionally permitted
+A primary goal of DeSFAM is to minimize the kernel                              unnecessary        syscalls     due       to       static
+attack surface by reducing exposed syscalls. Docker’s default                   over-approximation.
+
+
+VOLUME 13, 2025                                                                                                                                 139217
+                                                  S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+3) ATTACK PREVENTION COMPARISON
+DeSFAM’s runtime blocking was evaluated against a set
+of real-world CVEs representing diverse Linux kernel
+vulnerabilities. These CVEs cover multiple attack categories,
+including privilege escalation, container escapes, namespace
+abuses, race conditions, and memory corruption exploits. For
+safety and reproducibility, exploit behaviors were simulated
+by replaying the documented syscall invocation sequences
+associated with each CVE, based on public disclosures and
+                                                                      FIGURE 11. CPU usage with and without DeSFAM. DeSFAM incurs
+proof-of-concept                                                      minimal CPU overhead ( 1.74%) while enforcing real-time syscall policies.
+analyses.
+   Table 5 summarizes the blocking success across all frame-
+works. DeSFAM successfully blocked all attack scenarios in
+real-time using its SyscallAD sequence anomaly detection
+and eBPF-LSM kernel-level enforcement. In contrast, base-
+line frameworks (Confine, Prof-Gen, NIMOS, Optimus, and
+KubeRosy) either failed to detect these attacks or lacked full
+enforcement capability.
+
+4) BASELINE COMPARISON METRICS
+Table 6 summarizes comparative results for security strength,
+stability, and runtime efficiency.                                    FIGURE 12. Memory usage with and without DeSFAM. Slight memory
+                                                                      savings ( 6.1%) result from syscall suppression and exploit mitigation.
+   • Access list Size: DeSFAM achieves the smallest policy
+      (89 syscalls), minimizing attack exposure.
+   • Attack Prevention: DeSFAM blocks 94% of CVE traces,
+      outperforming static and offline methods.
+   • Benign Stability: Maintains 99% success across all
+      container workloads.
+   • FPR: Lowest false positive rate at 1.6%, ideal for
+      production use.
+   • Enforcement Latency: Achieves 0.540 µs, faster than all
+      baselines due to in-kernel enforcement.
+   These results affirm DeSFAM’s superiority in syscall-level
+threat prevention, combining precision, adaptability, and
+real-time enforcement with minimal system overhead.                   FIGURE 13. DeSFAM Phase 3 policy update latency. All rules were
+                                                                      inserted and enforced in under 100 µs without container disruption.
+
+D. RUNTIME PERFORMANCE
+We evaluate the runtime efficiency of DeSFAM under
+real-world container workloads to assess its impact on                2) POLICY UPDATE LATENCY
+system resources. Key performance indicators include CPU              To validate the responsiveness of DeSFAM’s adaptive
+and memory overhead, syscall latency, and policy update               enforcement, we measured rule insertion and propagation
+responsiveness during live enforcement.                               times in Phase 3. Upon anomaly detection, new rules
+                                                                      were injected into the eBPF map and applied in real
+1) CPU AND MEMORY OVERHEAD                                            time. Latency was measured using high-resolution kernel
+We evaluated resource usage across six representative con-            timestamps at both the insertion and propagation stages.
+tainers (Nginx, MySQL, Redis, Node.js, Python, MongoDB)               Fig 13 presents the measured rule insertion and propagation
+with and without DeSFAM. As shown in Fig.11 and Fig.12,               latency across six active containers. DeSFAM consistently
+DeSFAM incurs only a 1.74% increase in average CPU                    achieves sub-100 µs updates with no downtime, validating
+utilization and reduces memory consumption by 6.1%,                   its suitability for real-time adaptive syscall enforcement.
+primarily due to blocked syscall paths and mitigation of              Table 9 lists the measured latency (in microseconds) for
+exploit-induced memory bloat. Table 7 presents detailed               inserting and propagating a new enforcement rule during
+per-container resource usage, with average memory sav-                a live detection event in each container. The values were
+ings of 50–55 MB. Table 8 summarizes the aggregated                   collected using high-resolution kernel timestamps before
+results, confirming DeSFAM’s lightweight performance                  and after BPF map updates and LSM hook propagation.
+footprint.                                                            All values remain consistently low (65–82µs), confirming
+
+139218                                                                                                                           VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+TABLE 5. CVE attack blocking success rate.
+
+
+
+
+TABLE 6. Baseline comparison of security and performance metrics.
+
+
+
+
+TABLE 7. CPU and memory usage with and without DeSFAM.
+
+
+
+
+TABLE 8. Summary of performance overhead.                                       3) SYSCALL LATENCY OVERHEAD
+                                                                                We profiled syscall latency using bpftrace histograms
+                                                                                for frequent operations such as read, write, and
+                                                                                epoll_wait. Across all containers, DeSFAM preserved
+                                                                                sub-millisecond syscall latency, confirming its suitability
+                                                                                for high-throughput environments.Table 10 summarizes
+TABLE 9. Policy update and propagation latency.                                 the highest-frequency syscalls across each container that
+                                                                                completed within the 512–1000 µ s range. These results
+                                                                                demonstrate DeSFAM’s ability to consistently maintain low
+                                                                                syscall latency, even for frequent operations like read,
+                                                                                write, and epoll_wait without introducing measurable
+                                                                                delay. Figure 14 visualizes the aggregate counts per container
+                                                                                in this sub-millisecond range.
+
+                                                                                4) ANOMALY DETECTION PERFORMANCE
+the real-time capability of DeSFAM’s in-kernel enforcement                      DeSFAM’s SyscallAD model achieves strong classification
+engine. In any case, no downtime was observed.                                  metrics. As shown in Table 11, the ensemble classifier
+   All updates completed in under 100 µs without inter-                         reaches 96% overall accuracy, with an F1-score of 0.92 on
+rupting service, demonstrating DeSFAM’s capability for                          attack sequences. Fig 15 shows ROC and PR curves, with
+real-time, zero-downtime syscall policy adaptation.                             AUC of 0.94 and AP of 0.87.
+
+VOLUME 13, 2025                                                                                                                        139219
+                                                           S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+TABLE 10. Syscall counts in 512–1000 µs latency range.                         framework in minimizing the system call attack surface and
+                                                                               detecting anomalous behavior in containerized environments.
+                                                                               This section discusses key insights, design trade-offs, and the
+                                                                               practical implications of deploying DeSFAM in real-world
+                                                                               container security scenarios.
+
+                                                                               A. HYBRID ANALYSIS ADVANTAGE:
+                                                                               One of the core strengths of DeSFAM lies in its hybrid
+                                                                               syscall profiling approach. By integrating static disassembly
+                                                                               of container binaries with dynamic runtime tracing using
+                                                                               eBPF and bpftrace, DeSFAM captures both expected and
+                                                                               runtime-dependent syscall behavior. This dual-layer visibility
+                                                                               ensures that rare but essential syscalls are not missed, unlike
+                                                                               purely static systems such as Confine [31], which suffer from
+                                                                               under-approximation, or dynamic-only systems like NIMOS
+                                                                               [38], which risk over-approximation.
+
+                                                                               B. SUPERIOR REDUCTION WITHOUT FUNCTIONAL LOSS:
+FIGURE 14. Syscall latency distribution in the 512–1000 µs range. All          DeSFAM achieved an average syscall reduction rate of
+syscall paths remained performant under DeSFAM.                                78.60%, which is significantly higher than Confine [31]
+                                                                               (47.60%), Prof-gen [36] (67.80%), and NIMOS [38]
+TABLE 11. SyscallAD classification metrics.                                    (63.40%). Despite this aggressive minimization, all target
+                                                                               containers retained full functionality across all test work-
+                                                                               loads. This confirms that DeSFAM’s access list synthesis
+                                                                               balances security and compatibility better than static or
+                                                                               log-based access list generators.
+
+                                                                               C. HIGH-PERFORMANCE REAL-TIME ENFORCEMENT:
+                                                                               The framework’s use of eBPF for syscall filtering and policy
+                                                                               management introduces minimal runtime overhead. CPU
+5) FEATURE COMPARISON WITH EXISTING METHODS                                    usage increased by an average of only 1.74%, and memory
+DeSFAM uniquely integrates real-time anomaly detection,                        usage by ∼50MB, well below the threshold that would
+adaptive policy enforcement, and syscall minimization within                   impact container performance. Syscall latency remained
+a unified framework. Table 12 highlights its advantage over                    under 300 nanoseconds per invocation, validating DeSFAM’s
+existing frameworks across 12 technical dimensions.                            suitability for high-throughput workloads such as NGINX
+                                                                               and Redis. In comparison, user-space alternatives (e.g.,
+E. ABLATION STUDY: PHASE-WISE CONTRIBUTION                                     auditd) typically introduce millisecond-scale delays.
+To understand the impact of each phase in DeSFAM,
+we conducted an ablation study disabling one component at                      D. ADAPTIVE RESPONSE TO THREATS:
+a time. The goal was to measure each phase’s contribution to                   DeSFAM’s enforcement logic is not static. It dynamically
+attack prevention and syscall surface minimization.                            updates syscall allowlists using risk scoring and anomaly
+   As shown in Table 13, Phase 1 alone achieves 62.4%                          detection outputs from the SyscallAD module. The model
+syscall reduction but blocks only 3 of 14 CVEs. Adding                         achieved 96% overall accuracy, with an attack detection F1-
+Phase 2 (SyscallAD) boosts anomaly detection, raising                          score of 0.92 and a low false positive rate. This allowed
+the block count to 8 and reducing false positives signifi-                     DeSFAM to detect and respond to advanced CVE-based
+cantly. Phase 3 provides kernel-level enforcement, block-                      attacks (e.g., Polkit and Dirty Pipe) in real time, removing
+ing 10 CVEs even without ML support. When all three phases                     vulnerable syscalls such as setuid, splice, and clone
+are active, DeSFAM blocks all 14 CVEs and reaches 81.6%                        immediately upon detection.
+syscall reduction.
+   This study confirms that all phases are essential: Phase                    E. LIMITATIONS AND FUTURE WORK:
+1 minimizes exposure, Phase 2 enhances detection, and Phase                    While DeSFAM effectively reduces syscall exposure and
+3 ensures robust enforcement.                                                  detects anomalous behavior, its accuracy remains sensitive
+                                                                               to the representativeness of training data. Future work will
+VI. DISCUSSION                                                                 incorporate workload-aware profiling, container role classi-
+The results presented in the previous section validate the                     fication, and continuous learning to improve generalization
+effectiveness, efficiency, and adaptability of the DeSFAM                      across diverse workloads.
+
+139220                                                                                                                                    VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+                  FIGURE 15. SyscallAD model performance. Left: Precision-Recall Curve (AP = 0.87). Right: ROC Curve (AUC = 0.94).
+
+
+TABLE 12. Feature comparison with existing frameworks.
+
+
+
+
+TABLE 13. Ablation study: Phase-wise effect on security.                         access tracking via eBPF to further improve detection
+                                                                                 granularity and resilience against sophisticated attacks.
+                                                                                   Scalability in orchestrated environments is also a focus.
+                                                                                 Future deployments will integrate with Kubernetes via CRI
+                                                                                 hooks and namespace-aware policy enforcement, ensur-
+                                                                                 ing consistent, low-overhead protection across dynamic
+                                                                                 containerized clusters.
+
+TABLE 14. Filtering rules for CVE-based syscall extraction.
+                                                                                 VII. CONCLUSION
+                                                                                 This paper presented DeSFAM, a multi-phase, adaptive
+                                                                                 security framework for protecting containerized environ-
+                                                                                 ments against syscall-level threats. Unlike static filtering
+                                                                                 approaches, DeSFAM combines static and dynamic syscall
+                                                                                 profiling, hybrid deep learning-based anomaly detection,
+                                                                                 contextual risk scoring, and real-time in-kernel enforcement
+                                                                                 using eBPF and LSM hooks.
+                                                                                   At its core, DeSFAM integrates SyscallAD, a hybrid
+   Current filtering operates at the syscall level (ID and                       anomaly detection engine combining a Variational Autoen-
+sequence-based) without argument inspection. Future exten-                       coder (VAE) and Isolation Forest to identify malicious syscall
+sions will explore argument-level analysis and memory                            patterns based on frequency, sequence context, and timing
+
+VOLUME 13, 2025                                                                                                                         139221
+                                                                S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+features. The system also supports self-healing access list                            • Linux man-pages Section II8
+refinement, adapting syscall policies over time based on                            This ensures that only valid, in-kernel syscalls are candidates
+container-specific behaviors.                                                       for extraction and analysis.
+   To enable threat-aware enforcement, DeSFAM maps
+syscalls to MITRE ATT&CK techniques and known CVEs,                                 C. EXTRACTION AND FILTERING RULES
+driving tiered enforcement strategies (log, rate-limit, block)                      Regex patterns are applied to CVE descriptions, vendor
+based on dynamic risk scores. All policy enforcement                                advisories, and security mailing list disclosures to extract
+is executed in-kernel, ensuring low-latency response and                            syscall mentions and filter based on context:
+minimal performance overhead.
+   We evaluated DeSFAM on the DongTing dataset and                                  D. ALGORITHM PSEUDOCODE
+real-world exploits (e.g., CVE-2021-4034). Results show
+                                                                                    def extract_high_risk_syscalls(cves,
+high detection accuracy, sub-millisecond enforcement                                host_kernel, host_arch): S_blocked = set()
+latency, and only 1.94% average CPU overhead. Compared                              for cve in cves:
+to Confine, Optimus, and KubeRosy, DeSFAM achieves                                  # Kernel applicability check if not
+better syscall coverage, faster enforcement, and improved                           kernel_version_applicable(cve.desc,
+resilience. Our ablation study (Section VI-D) confirms                              host_kernel): continue
+                                                                                    # Architecture applicability check if
+that while Phase 1 enables foundational syscall reduction                           architecture_mismatch(cve.desc, host_arch):
+(62.4%), it is the combined effect of Phase 2’s real-time                           continue
+anomaly detection and Phase 3’s in-kernel enforcement that                          # Syscall extraction found_syscalls = re.
+achieves complete CVE blocking (14/14) and zero false                               findall(syscall_regex, cve.desc)
+positives.                                                                          # Contextual filtering for syscall in
+                                                                                    found_syscalls: if requires_special_cap
+   DeSFAM offers a scalable, workload-aware syscall                                 (cve.desc) and not container_has_cap():
+defense model suitable for modern container infrastructures.                        continue if needs_specific_device(cve.desc)
+Future enhancements include tighter Kubernetes integration,                         and not device_available(): continue
+syscall argument validation, and automated response orches-                         S_blocked.add(syscall)
+tration to further improve precision and adaptability.                              return S_blocked
+                                                                                    This ensures syscalls are only marked high-risk if exploit
+APPENDIX A                                                                          conditions are satisfied within the deployment context.
+RULEBASED CVE PARSER FOR SYSCALL EXTRACTION
+A. SCOPE AND DESIGN PRINCIPLES                                                      E. REAL-WORLD FILTERING EXAMPLES
+We design a deterministic, rule-based parser (rather than                           Example 1: CVE-2022-0185 (Linux Kernel)
+ML-based NLP) to extract high-risk syscalls from CVE                                  • Syscalls Extracted: ioctl, mount
+descriptions and vendor advisories, ensuring:                                         • Context: Requires CAP_SYS_ADMIN for exploitation.
+  • Transparency: Fully auditable and explainable pattern                             • Action: Block only if the container has CAP_SYS_
+     matching.                                                                           ADMIN.
+  • Precision: Uses a kernel-specific syscall lexicon to avoid                        Example 2: CVE-2021-22555 (NetFilter)
+     false positives.                                                                 • Syscall Extracted: setsockopt
+  • Context-awareness: Filters based on exploit conditions,
+                                                                                      • Context: Affects kernels < 5.12.
+     kernel versions, architecture, capabilities, and device                          • Action: Discarded if the host kernel is 5.15, avoiding
+     constraints.                                                                        unnecessary blocking.
+                                                                                    Definition of High-Risk Syscalls: Syscalls with known
+B. SYSCALL DICTIONARY CONSTRUCTION
+                                                                                    exploits that are applicable to the target environment,
+The syscall dictionary is built directly from kernel sources:
+                                                                                    ensuring that blocking is precise and context-aware to
+# Generated from kernel v5.15~headers                                               minimize disruption while maximizing security.
+$grep -r ‘SYSCALL_DEFINE’ arch/x86/kernel/
+ | \ awk -F’(’ ’{print$2}’ | cut -d, -f1 |
+  sort -u                                                                           ACKNOWLEDGMENT
+$\longrightarrow$ [accept, access, acct,                                            The authors acknowledge the anonymous reviewers for their
+ add_key, \ldots ]                                                                  valuable feedback and constructive suggestions, which sig-
+   Sources:                                                                         nificantly enhanced the clarity and quality of this manuscript.
+   • /arch/x86/entry/syscalls/syscall_64.
+                                                                                    Special thanks are also extended to the FAST National
+     tbl6                                                                           University of Computer and Emerging Sciences, Karachi,
+   • /include/linux/syscalls.h7
+                                                                                    Pakistan, for their technical guidance and infrastructure
+                                                                                    resources, which were instrumental in the implementation
+  6 https://elixir.bootlin.com/linux/latest/source/arch/x86/entry/syscalls/
+                                                                                    and evaluation of the DeSFAM framework.
+syscall_64.tbl
+  7 https://elixir.bootlin.com/linux/latest/source/include/linux/syscalls.h           8 https://man7.org/linux/man-pages/dir_section_2.html
+
+
+139222                                                                                                                                         VOLUME 13, 2025
+S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+CONFLICT OF INTEREST                                                               [18] A. Niemi, ‘‘Survey of real-world process sandboxing,’’ in Proc. 35th Conf.
+The authors declare that there are no conflicts of interest                             Open Innov. Assoc. (FRUCT), Apr. 2024, pp. 520–531.
+                                                                                   [19] H. Zhu and C. Gehrmann, ‘‘Lic-sec: An enhanced AppArmor Docker
+related to the research, authorship, or publication of this                             security profile generator,’’ J. Inf. Secur. Appl., vol. 61, Sep. 2021,
+manuscript. The research was conducted independently,                                   Art. no. 102924.
+and no external entity influenced the study design, data                           [20] Z. Chen, Q. Meng, C. Lao, Y. Liu, F. Ren, M. Yu, and Y. Zhou,
+interpretation, or outcomes presented in this work.                                     ‘‘eTran: Extensible kernel transport with eBPF,’’ in Proc. 22nd
+                                                                                        USENIX Symp. Networked Syst. Design Implement., 2025,
+                                                                                        pp. 407–425.
+REFERENCES                                                                         [21] J. Xie, C. Ma, H. Yu, L. Luo, and G. Sun, ‘‘Analysis and optimization
+ [1] O. Jarkas, R. Ko, N. Dong, and R. Mahmud, ‘‘A container security survey:           for passive one-way delay measurement tax in container networks,’’
+     Exploits, attacks, and defenses,’’ ACM Comput. Surveys, vol. 57, no. 7,            in Proc. IEEE 17th Int. Conf. Cloud Comput. (CLOUD), Jul. 2024,
+     pp. 1–36, Jul. 2025.                                                               pp. 247–255.
+ [2] S. Agrawal and D. Singh, ‘‘Study containerization technologies like           [22] Y. Zhou, X. Xiang, M. Kiley, S. Dharanipragada, and M. Yu,
+     Docker and Kubernetes and their role in modern cloud deployments,’’ in             ‘‘DINT: Fast in-kernel distributed transactions with eBPF,’’ in Proc.
+     Proc. IEEE 9th Int. Conf. Converg. Technol. (I2CT), Apr. 2024, pp. 1–5.            21st USENIX Symp. Networked Syst. Design Implement., 2024,
+ [3] S. Zehra, H. J. Syed, F. Samad, U. Faseeha, H. Ahmed, and                          pp. 401–417.
+     M. Khurram Khan, ‘‘Securing the shared kernel: Exploring kernel isola-        [23] A. Chaudhari, B. Gohil, and U. P. Rao, ‘‘A novel hybrid framework
+     tion and emerging challenges in modern cloud computing,’’ IEEE Access,             for cloud intrusion detection system using system call sequence
+     vol. 12, pp. 179281–179317, 2024.                                                  analysis,’’ Cluster Comput., vol. 27, no. 3, pp. 3753–3769,
+ [4] A. Lakkadwala and P. Lakkadwala, ‘‘Accelerating cloud deployment                   Jun. 2024.
+     through containerization technologies,’’ in Proc. Int. Conf. Adv. Comput.     [24] M. Landauer, F. Skopik, and M. Wurzenberger, ‘‘A critical review of com-
+     Res. Sci. Eng. Technol. (ACROSET), Sep. 2024, pp. 1–9.                             mon log data sets used for evaluation of sequence-based anomaly detection
+ [5] D. Zhan, Z. Yu, X. Yu, H. Zhang, and L. Ye, ‘‘Shrinking the                        techniques,’’ Proc. ACM Softw. Eng., vol. 1, no. FSE, pp. 1354–1375,
+     kernel attack surface through static and dynamic syscall limita-                   Jul. 2024.
+     tion,’’ IEEE Trans. Services Comput., vol. 16, no. 2, pp. 1431–1443,          [25] H. Satilmiş, S. Akleylek, and Z. Y. Tok, ‘‘A systematic literature
+     Mar. 2023.                                                                         review on host-based intrusion detection systems,’’ IEEE Access, vol. 12,
+ [6] Y. Xu, M. Zhou, Q. Gao, S. Zhang, and Z. Wu, ‘‘SWAT4J: Generating                  pp. 27237–27266, 2024.
+     system call allowlist for Java container attack surface reduction,’’ in       [26] G. Duan, Y. Fu, M. Cai, H. Chen, and J. Sun, ‘‘DongTing: A large-scale
+     Proc. IEEE Int. Conf. Softw. Anal., Evol. Reeng. (SANER), Mar. 2024,               dataset for anomaly detection of the Linux kernel,’’ J. Syst. Softw., vol. 203,
+     pp. 929–939.                                                                       Sep. 2023, Art. no. 111745.
+ [7] W. Liu, R. Yi, Y. Gu, Z. Chu, C. Liu, and H. Yang, ‘‘Escape attacks on        [27] S. Yang, B. B. Kang, and J. Nam, ‘‘Optimus: Association-based dynamic
+     transwarp data cloud container,’’ in Proc. 9th IEEE Int. Conf. Smart Cloud         system call filtering for container attack surface reduction,’’ J. Cloud
+     (SmartCloud), May 2024, pp. 97–102.                                                Comput., vol. 13, no. 1, p. 71, Mar. 2024.
+ [8] Z. Guo, Z. Lv, N. Li, T. Yuan, X. Gao, and Z. Yuan, ‘‘Comprehensive           [28] Y. Xing, X. Wang, S. Torabi, Z. Zhang, L. Lei, and K. Sun,
+     defense scheme against container escape related to container management            ‘‘A hybrid system call profiling approach for container protection,’’
+     procedure,’’ in Proc. Int. Conf. Cyber-Enabled Distrib. Comput. Knowl.             IEEE Trans. Dependable Secure Comput., vol. 21, no. 3, pp. 1068–1083,
+     Discovery (CyberC), Oct. 2022, pp. 263–266.                                        Mar. 2024.
+ [9] K. Tan, D. Zhan, L. Ye, H. Zhang, B. Fang, and Z. Tian, ‘‘A high-             [29] J. Her, C. H. Jo, T. Park, and S. Lee, ‘‘KubeRosy: A dynamic
+     performance real-time container file monitoring approach based on                  system call filtering framework for containers,’’ IEEE Access, vol. 12,
+     virtual machine introspection,’’ J. Supercomput., vol. 81, no. 1, pp. 1–24,        pp. 159889–159901, 2024.
+     Jan. 2025.
+                                                                                   [30] T. Zheng, Y. Qiu, Y. Zheng, Q. Wang, and X. Chen, ‘‘Enhancing
+[10] G. Ramasamy and S. Kamalakkannan, ‘‘Enhancement of containerization-               TinyML-based container escape detectors with systemcall semantic
+     based cloud computing performance using hybrid Metaheuristic optimiza-             association in UAVs networks,’’ IEEE Internet Things J., vol. 11, no. 12,
+     tion algorithm: A review,’’ in Proc. Int. Conf. Electron. Renew. Syst.             pp. 21158–21169, Jun. 2024.
+     (ICEARS), Feb. 2025, pp. 1072–1079.
+                                                                                   [31] M. Rostamipoor, S. Ghavamnia, and M. Polychronakis, ‘‘Confine: Fine-
+[11] Y. He, R. Guo, Y. Xing, X. Che, K. Sun, Z. Liu, K. Xu, and Q. Li, ‘‘Cross
+                                                                                        grained system call filtering for container attack surface reduction,’’
+     container attacks: The bewildered eBPF on clouds,’’ in Proc. 32nd USENIX
+                                                                                        Comput. Secur., vol. 132, Sep. 2023, Art. no. 103325.
+     Secur. Symp., 2023, pp. 5971–5988.
+                                                                                   [32] S. Xu, Y. Wang, L. Lei, K. Sun, J. Jing, S. Ma, J. Wang, and H. Huang,
+[12] M. Zhou, X. Jia, H. Su, S. Huang, Y. Du, H. Du, R. Wang, and J. Tang,
+                                                                                        ‘‘Condo: Enhancing container isolation through kernel permission data
+     ‘‘Container privilege escalation and escape detection method based on
+                                                                                        protection,’’ IEEE Trans. Inf. Forensics Security, vol. 19, pp. 6168–6183,
+     security-first architecture,’’ in Proc. IEEE Int. Conf. High Perform.
+                                                                                        2024.
+     Comput. Commun., Data Sci., Syst., Smart City Dependability Sensor,
+     Cloud Big Data Syst. Appl., Dec. 2023, pp. 490–498.                           [33] S. Ghavamnia, T. Palit, and M. Polychronakis, ‘‘C2C: Fine-grained
+[13] S. H. Said Abdelaziz Abdelrazek, H. B. Kutty Mammi, and                            configuration-driven system call filtering,’’ in Proc. ACM SIGSAC Conf.
+     M. M. Din, ‘‘Privilege escalation focused offensive security training              Comput. Commun. Secur., Nov. 2022, pp. 1243–1257.
+     platform,’’ in Proc. Int. Conf. Data Sci. Appl. (ICoDSA), Oct. 2021,          [34] M. Abbas, S. Khan, A. Monum, F. Zaffar, R. Tahir, D. Eyers, H. Irshad,
+     pp. 169–174.                                                                       A. Gehani, V. Yegneswaran, and T. Pasquier, ‘‘PACED: Provenance-based
+[14] V. S. D. Priya, S. C. Sethuraman, and M. K. Khan, ‘‘Container security:            automated container escape detection,’’ in Proc. IEEE Int. Conf. Cloud
+     Precaution levels, mitigation strategies, and research perspectives,’’             Eng. (IC2E), Sep. 2022, pp. 261–272.
+     Comput. Secur., vol. 135, Dec. 2023, Art. no. 103490.                         [35] M. Cavalcanti, P. Inacio, and M. Freire, ‘‘Performance evaluation of
+[15] R. Rajyashree, S. Mathi, G. Saravanan, and M. Sakthivel, ‘‘An                      container-level anomaly-based intrusion detection systems for multi-tenant
+     empirical investigation of Docker sockets for privilege escalation                 applications using machine learning algorithms,’’ in Proc. 16th Int. Conf.
+     and defensive strategies,’’ Proc. Comput. Sci., vol. 233, pp. 660–669,             Availability, Rel. Secur., Aug. 2021, pp. 1–9.
+     Jan. 2024.                                                                    [36] S. Kim, B. J. Kim, and D. H. Lee, ‘‘Prof-gen: Practical study on
+[16] M. S. Haq, T. D. Nguyen, A. S. Tosun, F. Vollmer, T. Korkmaz, and                  system call whitelist generation for container attack surface reduction,’’
+     A.-R. Sadeghi, ‘‘SoK: A comprehensive analysis and evaluation of Docker            in Proc. IEEE 14th Int. Conf. Cloud Comput. (CLOUD), Sep. 2021,
+     container attack and defense mechanisms,’’ in Proc. IEEE Symp. Secur.              pp. 278–287.
+     Privacy (SP), May 2024, pp. 4573–4590.                                        [37] T. Iiguni, H. Kamei, and K. Saisho, ‘‘Sprofiler: Automatic generating
+[17] C. Shepherd and K. Markantonakis, ‘‘Operating system controls,’’ in                system of container-native system call filtering rules for attack surface
+     Trusted Execution Environments. Cham, Switzerland: Springer, 2024,                 reduction,’’ in Proc. Int. Conf. Comput. Sci. Comput. Intell. (CSCI),
+     pp. 33–53.                                                                         Dec. 2021, pp. 704–709.
+
+VOLUME 13, 2025                                                                                                                                               139223
+                                                                  S. Zehra et al.: DeSFAM: An Adaptive eBPF and AI-Driven Framework for Securing Cloud Containers
+
+
+
+
+[38] S. Song, S. Suneja, M. V. Le, and B. Tak, ‘‘On the value of sequence-based                                   FAHAD SAMAD received the B.S. degree in
+     system call filtering for container security,’’ in Proc. IEEE 16th Int. Conf.                                computer science from the University of Karachi,
+     Cloud Comput. (CLOUD), Jul. 2023, pp. 296–307.                                                               Pakistan, in 2004, the M.S. degree in information
+                                                                                                                  technology from the National University of Sci-
+                                                                                                                  ences and Technology (NUST), Pakistan, in 2006,
+                                                                                                                  and the Doctorate (Ph.D.) degree in computer
+                                                                                                                  science from RWTH Aachen University, Germany,
+                          SEHAR ZEHRA received the B.Sc. degree (Hons.)                                           in 2011. He was an Assistant Professor with
+                          in mathematics and the M.C.S. degree in com-                                            the Usman Institute of Technology, Pakistan, and
+                          puter science from the University of Karachi, in                                        the University of Fujairah (previously Fujairah
+                          2000 and 2002, respectively, and the M.S. degree            College), United Arab Emirates. He is currently an Assistant Professor and
+                          in computer science from the Sir Syed University            the Head (Cyber Security) of the FAST National University of Computer
+                          of Engineering and Technology, Karachi, Pakistan,           and Emerging Sciences (FAST-NUCES), Karachi Campus. He has published
+                          in 2012. She is currently pursuing the Ph.D. degree         several research articles in his area of interest. His research interests include
+                          in computer science with the FAST National                  information and network security, cybersecurity, eBPF, software-defined
+                          University of Computer and Emerging Sciences,               networks, the IoT security, smart city networks, and AI-assisted security.
+                          Karachi. With more than 20 years of teaching
+experience, she is an Assistant Professor with the Khursheed Government
+Girls Degree College, Karachi. She has supervised numerous bachelor’s
+projects and has taught a variety of computer science courses. Her research
+interests include cloud computing, cybersecurity, the Internet of Things
+(IoT), eBPF, machine learning, and computer networking.
+
+
+
+
+                           HASSAN JAMIL SYED received the B.E. degree
+                           in electrical engineering from the Quaid-e-Awam
+                           University of Engineering, Sciences, and Tech-
+                           nology, Nawabshah, Pakistan, in 2003, the M.S.
+                           degree in personal mobile and satellite commu-                                        UMMAY FASEEHA (Member, IEEE) is currently
+                           nication from the University of Bradford, U.K.,                                       pursuing the Ph.D. degree with the Department
+                           in 2008, and the Ph.D. degree in computer                                             of Computer Science, FAST National University
+                           science from the University of Malaya, Malaysia,                                      of Computer and Emerging Sciences, Karachi,
+                           in 2019. He was an Assistant Professor with FAST-                                     Pakistan. She is an Assistant Professor with the
+                           NUCES, Karachi, and later as a Senior Lecturer                                        Jinnah University for Women, Karachi. With a
+with Universiti Malaysia Sabah (UMS), Malaysia. He has also worked                                               strong commitment to academic excellence, she
+in industry as a Network Engineer and held teaching positions with Iqra                                          has been involved in various research projects
+University. He is currently a Senior Lecturer with the School of Technology,                                     and has made significant contributions to the field
+Asia Pacific University of Technology and Innovation (APU), Kuala Lumpur.                                        of computer science through her teaching and
+His research interests include cloud computing, cybersecurity, SDN, NFV,                                         research endeavors.
+eBPF, and the IoT.
+
+
+
+
+139224                                                                                                                                                VOLUME 13, 2025
+

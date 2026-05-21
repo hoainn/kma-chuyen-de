@@ -1,0 +1,18 @@
+\begin{abstract}
+Containerized applications offer lightweight and scalable deployment but remain exposed to
+security risks due to a shared kernel. We present DeSFAM (Dynamic eBPF-driven Syscall Filtering and
+Anomaly Mitigation), a real-time security framework that enforces least-privilege syscall usage and detects
+behavioral anomalies. DeSFAM integrates: 1)~hybrid syscall profiling through static analysis and dynamic
+eBPF tracing; 2)~SyscallAD (System call Anomaly Detection), a low-latency anomaly detector combining
+Variational Autoencoder (VAE) and Isolation Forest (iForest); 3)~contextual risk scoring based on MITRE
+ATT\&CK mappings and CVE correlations; and 4)~adaptive syscall enforcement using eBPF maps and LSM
+hooks. Evaluations using the DongTing dataset and real-world CVE attack scenarios show DeSFAM achieves
+94\% precision, 90\% recall, sub-millisecond enforcement latency, and less than 1\% performance overhead.
+DeSFAM effectively blocks privilege escalation, container escape attempts, and syscall injection attacks in
+modern container environments.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Anomaly detection, cloud containers, container security, eBPF monitoring, real-time threat
+detection, syscall filtering, seccomp hardening.
+\end{IEEEkeywords}

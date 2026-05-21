@@ -1,0 +1,100 @@
+\section{Related Work}
+\label{sec:related}
+
+This section discusses state-of-the-art approaches categorized by filtering, anomaly detection,
+provenance tracking, and kernel-hardening, highlighting their strengths and limitations compared
+to the DeSFAM framework. Table~\ref{tab:related_work} summarizes recent syscall filtering and
+anomaly detection approaches, highlighting their problem focus, limitations, and core techniques.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Comparison of State-of-the-Art Container Security Solutions.}
+  \label{tab:related_work}
+  \includegraphics[width=\linewidth]{table1}
+\end{table*}
+
+\subsection{System Call Filtering Approaches}
+\label{subsec:syscall_filtering}
+
+Confine~\cite{ref31_confine} uses static analysis to construct restrictive seccomp profiles,
+achieving a 47.6\% syscall reduction rate (SRR). However, its static nature prevents adaptation
+to runtime behaviors, reducing effectiveness against evolving workloads. Similarly,
+Prof-gen \cite{ref36_profgen} relies on static techniques that either require manual
+configuration or omit dynamic tracing, limiting scalability and robustness in real-world
+deployments.
+
+KubeRosy~\cite{ref29_kuberosy} and Optimus~\cite{ref27_optimus} incorporate eBPF for live
+syscall monitoring and runtime policy updates. KubeRosy leverages Kubernetes CRDs for real-time
+policy refinement but remains tied to Kubernetes environments. Optimus employs
+association-based filtering to iteratively adapt syscall profiles, yet its automation is
+constrained---it requires operator approval for unmatched syscalls and halts profile updates if
+association analysis fails. Prof-gen, while combining dynamic boot-time tracing with static call
+graph analysis to generate minimal access lists without source code, lacks support for capturing
+behavioral shifts during runtime execution.
+
+\subsection{Anomaly-Based Intrusion Detection Systems}
+\label{subsec:anomaly_ids}
+
+Machine learning-based techniques have been widely explored for syscall anomaly detection. The
+BoSC-based IDS employs Bag-of-System Calls modeling with classifiers like Random Forests,
+offering reasonable accuracy in small-scale environments. However, frequent retraining
+requirements hinder scalability and adaptability.
+
+Lightweight models such as the TinyML-based Escape Detector target IoT and edge devices but fall
+short in handling complex attack vectors in high-performance cloud systems due to limited
+adaptability and accuracy.
+
+DeSFAM addresses these limitations in Phase~2 via a hybrid anomaly detector combining a
+Variational Autoencoder (VAE) with an Isolation Forest, trained on the DongTing
+dataset~\cite{ref26_dongtingdataset}. This approach enables accurate, low-latency detection of
+zero-day attacks with no need for retraining, while supporting real-time sliding window
+inference.
+
+\subsection{Provenance-Based Detection Approaches}
+\label{subsec:provenance}
+
+Provenance-driven systems like PACED monitor syscall relationships and causality across
+containers to detect cross-namespace attacks. While effective, they suffer from high overhead
+due to continuous graph construction and limited scalability.
+
+DeSFAM circumvents this by embedding syscall context (e.g., PID, namespace, timestamps)
+directly into model features, enabling behavioral awareness without the cost of full provenance
+tracking.
+
+\subsection{Kernel-Level Security Enhancements}
+\label{subsec:kernel_security}
+
+Kernel-layer defenses such as Condo use Trusted Execution Environments (TEEs) to safeguard
+permission integrity. Though secure, their reliance on specialized hardware and kernel
+modification makes them unsuitable for large-scale cloud deployments.
+
+In contrast, DeSFAM achieves portability and scalability by utilizing eBPF maps and LSM hooks to
+enforce syscall policies dynamically, without modifying the kernel or depending on TEEs.
+
+\subsection{Common Limitations of Existing Approaches}
+\label{subsec:common_limitations}
+
+While there have been meaningful advances in syscall minimization and container security, current
+solutions face several key limitations:
+
+\begin{itemize}
+  \item Static policies cannot adapt to evolving runtime behaviors.
+  \item Lack of real-time enforcement allows syscall abuse between updates.
+  \item Machine learning approaches require frequent retraining, limiting scalability.
+  \item Hardware dependencies (e.g., TEEs) restrict deployment flexibility.
+\end{itemize}
+
+\subsection{DeSFAM: Advancing the State of the Art}
+\label{subsec:desfam_advancement}
+
+DeSFAM addresses key limitations of prior systems through a unified, multi-phase architecture.
+It combines hybrid syscall profiling, combining static binary disassembly with dynamic runtime
+tracing, to generate accurate syscall access lists. Real-time enforcement is achieved via eBPF
+probes and LSM hooks, enabling low-latency blocking and policy updates without restarting
+containers. Anomaly detection is handled by SyscallAD, a hybrid model using a Variational
+Autoencoder and Isolation Forest for precise, retraining-free detection of known and zero-day
+attacks. DeSFAM also incorporates CVE-aware filtering and MITRE ATT\&CK-based risk scoring to
+restrict vulnerable syscalls dynamically, and applies tiered response logic to enforce
+fine-grained actions based on threat severity. The framework operates without kernel modification
+or reliance on orchestration platforms, offering scalable and adaptive syscall security for
+modern container environments.

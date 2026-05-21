@@ -1,0 +1,9 @@
+{
+  "variant": "vae_container",
+  "latent_dim": 24,
+  "input_dim": 174,
+  "vae_lo": 5.505340309143066,
+  "vae_hi": 237.4642221069336,
+  "vae_threshold": 71.45677947998047,
+  "best_val_auc": 0.9895833333333334
+}
