@@ -1,0 +1,48 @@
+# MITRE ATT&CK TA0008 — Lateral Movement: internal network scanning + brute force
+# Cited in: ADFA-LD (Hydra SSH/FTP brute force — most referenced benchmark),
+#           Falco lateral movement rules, DeepLog paper network scenarios,
+#           NCC Group K8s lateral movement research
+#
+# Distinctive syscall pattern:
+#   socket(AF_INET, SOCK_STREAM) → connect() × many_hosts (rapid sequential)
+#   fork/clone → execve pattern (mimics Hydra worker spawning)
+#   getaddrinfo, getsockopt repeated for each host/port combination
+apiVersion: v1
+kind: Pod
+metadata:
+  name: attack-lateral-movement
+  namespace: demo
+  labels:
+    role: attack
+    scenario: lateral-movement
+    mitre: TA0008
+spec:
+  restartPolicy: Always
+  containers:
+  - name: attacker
+    image: ubuntu:22.04
+    command:
+    - bash
+    - -c
+    - |
+      while true; do
+        # Internal subnet scan — rapid socket/connect calls (Hydra-like pattern)
+        # Scans the pod CIDR for common service ports
+        BASE="10.244.0"
+        for octet in $(seq 1 20); do
+          HOST="${BASE}.${octet}"
+          for port in 22 80 443 3306 5432; do
+            bash -c "echo > /dev/tcp/$HOST/$port" 2>/dev/null && echo "found $HOST:$port" || true
+          done
+        done
+
+        # SSH brute force simulation — sequential connection attempts to port 22
+        for cred in "admin:admin" "root:root" "user:password" "admin:123456"; do
+          bash -c "echo > /dev/tcp/nginx/22" 2>/dev/null || true
+        done
+
+        sleep 25
+      done
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits:   { cpu: 200m, memory: 128Mi }

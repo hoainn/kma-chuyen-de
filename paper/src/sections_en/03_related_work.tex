@@ -1,0 +1,136 @@
+\section{Related Work}
+\label{sec:related}
+
+Research on host-based intrusion detection using system calls spans three decades and can
+be grouped into four directions: sequence-based statistical methods, deep-learning anomaly
+detectors, container-oriented approaches, and the DeSFAM framework that this work reproduces
+and extends. Table~\ref{tab:related_comparison} summarises the seven most closely related
+methods, comparing their technique, evaluation dataset, best reported metric, and key
+limitation.
+
+\begin{table*}[tp]
+\centering
+\caption{Comparison of Representative Syscall Anomaly Detection Methods}
+\label{tab:related_comparison}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}llllp{4.2cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Year} & \textbf{Technique} & \textbf{Dataset} & \textbf{Key Limitation} \\
+\midrule
+STIDE~\cite{forrest1996sense}
+  & 1996 & $n$-gram sequence lookup table
+  & UNM traces
+  & Evaded by mimicry attacks; no argument context \\
+
+Anagram~\cite{wang2006anagram}
+  & 2006 & Randomised $n$-gram Bloom filters
+  & UNM custom
+  & High-order $n$-grams costly; no semantic context \\
+
+Creech \& Hu~\cite{creech2014semantic}
+  & 2014 & Grammar phrases + Extreme Learning Machine
+  & ADFA-LD
+  & Training takes days per host; not drift-robust \\
+
+DAGMM~\cite{zong2018dagmm}
+  & 2018 & Deep AE + Gaussian mixture estimation
+  & KDD Cup 99
+  & Evaluated on tabular data only; not on syscall traces \\
+
+Haider et al.~\cite{haider2021deep}
+  & 2021 & LSTM / WaveNet on syscall sequences
+  & ADFA-LD, PLAID
+  & Supervised: requires labelled attack data for training \\
+
+CHIDS~\cite{elkhairi2022chids}
+  & 2022 & Unsupervised AE on syscall property vectors
+  & Custom container
+  & Private dataset; per-container profiling required \\
+
+DeSFAM~\cite{desfam_original}
+  & 2025 & VAE + Isolation Forest ensemble (SyscallAD)
+  & DongTing
+  & Evaluated on single dataset; cross-dataset gap unstudied \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Classic Sequence-Based Methods}
+\label{subsec:classic}
+
+Forrest et al.~\cite{forrest1996sense} introduced STIDE, the foundational approach in
+host-based IDS: normal behaviour is modelled as a set of short $n$-gram syscall sequences,
+and any unseen sequence triggers an alarm.
+Follow-on work by Hofmeyr et al.~\cite{hofmeyr1998ids} and Warrender et
+al.~\cite{warrender1999detecting} extended STIDE and compared it against Hidden Markov
+Models (HMMs), finding that HMMs yield the lowest false-positive rate but are too slow for
+real-time deployment. Wagner and Soto~\cite{wagner2002mimicry} later demonstrated that
+sequence-only models are fundamentally vulnerable to mimicry attacks, where an attacker
+interleaves benign system calls to make malicious traces appear normal.
+
+Wang et al.~\cite{wang2006anagram} proposed Anagram, which replaces the deterministic lookup
+table with randomised $n$-gram Bloom filters, providing statistical resistance to mimicry
+while reducing memory overhead. Nevertheless, both STIDE and Anagram share a fundamental
+weakness: they model call \textit{order} but ignore call \textit{arguments}, frequency
+distribution, and temporal context---features that a VAE can capture through latent
+representations.
+
+\subsection{Deep Learning for Syscall Anomaly Detection}
+\label{subsec:deep}
+
+Creech and Hu~\cite{creech2014semantic} replaced sequence matching with semantic features
+derived from context-free grammar analysis, fed into an Extreme Learning Machine (ELM).
+Their method achieves state-of-the-art results on ADFA-LD at the time, but requires
+days of training per host and does not adapt to concept drift---making it impractical
+for dynamic container workloads.
+
+Zong et al.~\cite{zong2018dagmm} proposed DAGMM, a jointly trained deep autoencoder and
+Gaussian Mixture Model that achieves up to 14\% F1 improvement over prior SOTA on KDD Cup
+99. Although DAGMM demonstrates the value of unsupervised deep anomaly detection, it is
+evaluated only on tabular network-flow data and has not been applied to raw syscall traces.
+
+Haider et al.~\cite{haider2021deep} conducted the most comprehensive deep-learning
+comparison on ADFA-LD, testing LSTM (200/400-cell), GRU, CNN+RNN, and WaveNet.
+WaveNet achieves the highest accuracy on ADFA-LD; however, all models are
+\textit{supervised}---they require labelled attack traces at training time, which is
+infeasible in production deployments where attack sequences are unavailable or
+unlabelled.
+
+\subsection{Container-Oriented and Unsupervised Approaches}
+\label{subsec:container}
+
+Abed et al.~\cite{abed2015bag} applied Bag-of-System-Calls with $k$-NN and $k$-means
+to Docker container traces, showing that even order-agnostic frequency counts
+outperform some sequence methods in container contexts. Castanhel et
+al.~\cite{castanhel2021peek} demonstrated that pre-filtering to 1\% of syscall traces
+via relevance scoring maintains $>$90\% F1, offering a lightweight deployment path.
+El Khairi et al.~\cite{elkhairi2022chids} (CHIDS) combine heterogeneous syscall property
+vectors with an unsupervised autoencoder and achieve high AUC across multiple attack
+scenarios, but evaluate on a private single-cluster dataset with no public benchmark.
+Bsoul et al.~\cite{bsoul2022ensemble} construct directed syscall graphs and apply a
+Random Forest and Isolation Forest ensemble, yielding high detection rates across seven
+attack types; however, the Random Forest component requires labelled attack data.
+
+\subsection{DeSFAM and the Gap Addressed by This Work}
+\label{subsec:desfam_gap}
+
+Mansour et al.~\cite{desfam_original} introduced DeSFAM, an end-to-end eBPF framework
+that combines hybrid syscall profiling, SyscallAD (a VAE and Isolation Forest ensemble),
+CVE-aware filtering, and LSM-based enforcement. SyscallAD is trained exclusively on normal
+traffic and evaluated on DongTing~\cite{ref26_dongtingdataset}, achieving Precision 94\%
+and Recall 90\% with sub-millisecond enforcement latency.
+
+Despite these results, no published work has evaluated SyscallAD on any dataset outside
+DongTing. As Table~\ref{tab:related_comparison} shows, all existing HIDS papers either use
+private container datasets or a single public benchmark. This leaves two open questions:
+(1) does SyscallAD's accuracy hold on a structurally different benchmark such as ADFA-LD,
+which contains real-world attack categories (brute-force, lateral movement, web shell)
+rather than kernel bug triggers? (2) which component---VAE or Isolation Forest---is
+responsible for performance degradation when the attack distribution changes?
+
+This work addresses both questions by reproducing SyscallAD on DongTing to verify its
+published results, and extending the evaluation to ADFA-LD to characterise cross-dataset
+generalisation. Our experiments reveal that the Isolation Forest component collapses on
+ADFA-LD (AUC = 0.33), while the VAE component retains discriminative ability
+(AUC = 0.67), identifying component-specific failure modes as a finding not reported in
+any prior work.

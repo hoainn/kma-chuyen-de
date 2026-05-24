@@ -1,0 +1,44 @@
+# Tetragon values for DeSFAM — UAT cluster
+# Stripped to fields that matter; everything else uses chart defaults.
+
+hostNetwork: true
+
+tolerations:
+  - operator: Exists
+
+tetragon:
+  grpc:
+    enabled: true
+    # Listen on all interfaces so the NodePort can forward to it.
+    address: "0.0.0.0:54321"
+
+  exportFilename: tetragon.log
+
+  # Required for TracingPolicyNamespaced namespace scoping.
+  enablePolicyFilter: true
+
+  # Enriches events with K8s pod / namespace metadata.
+  enableK8sAPI: true
+
+  # Export all kprobe/exec/exit events; file-sink deny-list keeps noise out of logs.
+  exportAllowList: |-
+    {"event_set":["PROCESS_EXEC", "PROCESS_EXIT", "PROCESS_KPROBE"]}
+  exportDenyList: |-
+    {"health_check":true}
+    {"namespace":["", "cilium", "kube-system"]}
+
+tetragonOperator:
+  enabled: true
+  tracingPolicy:
+    # Installs TracingPolicy + TracingPolicyNamespaced CRDs.
+    enabled: true
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+crds:
+  installMethod: "operator"

@@ -1,0 +1,75 @@
+services:
+
+  detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"          # Prometheus /metrics
+    environment:
+      TETRAGON_ADDR:      ${TETRAGON_ADDR:-10.200.118.136:30321}
+      ARTIFACTS_DIR:      /artifacts
+      TARGET_NAMESPACE:   ${TARGET_NAMESPACE:-demo}
+      KERNEL_VER:         ${KERNEL_VER:-6.17}
+      THRESHOLD:          ${THRESHOLD:-0.08}
+      MIN_SEQ_LEN:        ${MIN_SEQ_LEN:-8}
+      MAX_SEQ_LEN:        ${MAX_SEQ_LEN:-5000}
+      MAX_IDLE_SECS:      ${MAX_IDLE_SECS:-30}
+      FLUSH_INTERVAL:     ${FLUSH_INTERVAL:-5}
+      ALERT_CONSECUTIVE:  ${ALERT_CONSECUTIVE:-1}
+      SCORES_ONLY:        ${SCORES_ONLY:-1}
+      TF_CPP_MIN_LOG_LEVEL: "2"
+    volumes:
+      - ${ARTIFACTS_DIR_HOST:-../model}:/artifacts:ro
+    restart: unless-stopped
+    command: >
+      python detect.py
+        --tetragon-addr ${TETRAGON_ADDR:-10.200.118.136:30321}
+        --artifacts-dir /artifacts
+        --namespace ${TARGET_NAMESPACE:-demo}
+        --kernel-ver ${KERNEL_VER:-6.17}
+        --threshold ${THRESHOLD:-0.08}
+        --min-seq-len ${MIN_SEQ_LEN:-8}
+        --max-seq-len ${MAX_SEQ_LEN:-5000}
+        --max-idle-secs ${MAX_IDLE_SECS:-30}
+        --flush-interval ${FLUSH_INTERVAL:-5}
+        --alert-consecutive ${ALERT_CONSECUTIVE:-1}
+        --scores-only
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/desfam.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

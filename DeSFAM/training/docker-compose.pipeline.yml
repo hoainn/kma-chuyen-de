@@ -1,0 +1,63 @@
+services:
+
+  mongo:
+    image: mongo:6
+    volumes:
+      - experiment_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # Fast headless training — runs train.py directly, no Jupyter overhead
+  # Usage: docker compose -f docker-compose.pipeline.yml run --rm train
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ${DONGTING_REPO:-../../DongTing}:/data/dongting_repo:ro
+      - ${MODEL_DIR:-../model}:/model
+      - .:/workspace
+    environment:
+      MONGO_URI:   mongodb://mongo:27017/
+      MONGO_DB:    syzbot_DB
+      SYSCALL_TBL: /data/dongting_repo/syscall_64.tbl
+      OUTPUT_DIR:  /model
+      TF_CPP_MIN_LOG_LEVEL: "2"
+    working_dir: /workspace
+    command: python train.py
+
+  # Interactive Jupyter Lab — open http://localhost:8888 for academic exploration
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "8888:8888"
+    volumes:
+      - ${DONGTING_REPO:-../../DongTing}:/data/dongting_repo:ro
+      - ${MODEL_DIR:-../model}:/model
+      - .:/workspace
+    environment:
+      MONGO_URI:   mongodb://mongo:27017/
+      MONGO_DB:    syzbot_DB
+      SYSCALL_TBL: /data/dongting_repo/syscall_64.tbl
+      OUTPUT_DIR:  /model
+      TF_CPP_MIN_LOG_LEVEL: "2"
+    working_dir: /workspace
+    command: >
+      jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+        --ServerApp.token='' --ServerApp.password=''
+
+volumes:
+  experiment_mongo_data:
+    external: true

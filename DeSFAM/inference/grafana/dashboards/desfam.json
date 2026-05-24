@@ -1,0 +1,1518 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Live detection dashboard for the DeSFAM ML inference engine. Monitors per-process syscall sequences streamed from eBPF (Tetragon) and scores them with an Isolation Forest + VAE ensemble. Threshold derived from validation-set percentile; scores above it trigger alerts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Guide \u2014 How to read this dashboard (click to expand)",
+      "collapsed": true,
+      "gridPos": {
+        "y": 0,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "panels": [
+        {
+          "id": 100,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 1,
+            "x": 0,
+            "h": 13,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "## DeSFAM \u2014 Syscall Anomaly Detection Dashboard\n\n**How scoring works:** Tetragon (eBPF) captures every syscall made by each container. When a process exits, its full syscall trace is scored by two models and combined into one ensemble score.\n\n| Component | What it measures | High score means |\n|---|---|---|\n| **Isolation Forest (IF)** | Unusual syscall *frequency* \u2014 anomalies isolated in fewer tree splits | Call frequencies are far from normal |\n| **VAE (Autoencoder)** | Unusual syscall *sequence patterns* \u2014 trained on normal traces only | Sequence structure doesn't match normal behavior |\n| **Ensemble** | `0.7 \u00d7 RobustScaled(VAE error) + 0.3 \u00d7 RobustScaled(IF score)` | Combined anomaly signal |\n\n**Why scores can be negative:** Both scalers are centred on the *median* of normal training scores, so a typical normal trace scores near 0. Traces scoring below 0 are more-normal-than-average.\n\n**Threshold (0.08):** The model was trained on DongTing cluster data. This cluster's normal baseline differs slightly \u2014 live calibration showed normal pods score \u2248 0.05\u20130.06. Threshold is set to 0.08 to avoid constant false positives; genuine attacks (e.g. mass `clone` calls, large VAE error) score \u2265 0.10.\n\n**Why the IF score is negative for normal pods:** sklearn's `decision_function` returns **positive** for normal samples (long path through trees = not easily isolated) and **negative** for anomalies (short path = isolated quickly). We negate it so that *higher always means more anomalous*. A healthy pod shows IF \u2248 \u22120.10 (normal); an attacking pod shows IF > 0 (anomalous).\n\n> **Quick investigation guide:** High consecutive attacks \u2192 sustained, not a false positive. Check **Last Attack Trace \u2192 Top Syscalls** for behavioural evidence (e.g. `mmap\u00d71000` = memory abuse \u00b7 `connect\u00d7100` = port scan \u00b7 `openat\u00d750` = file snooping)."
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        },
+        {
+          "id": 101,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 8,
+            "x": 0,
+            "h": 6,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "| Panel | Meaning |\n|---|---|\n| **Total Attack Events** | Cumulative attack-classified traces since detector start. Resets on restart. Filter by Pod (top of page) to see per-pod totals. |\n| **Pods in Stream** | Pods sending syscall events via Tetragon. Appears immediately on first event \u2014 before any scoring. |\n| **Pods Scored** | Pods with at least one completed process trace scored. Lower than \"in stream\" if some processes haven't exited yet. |\n| **Detection Threshold** | Ensemble score cut-off: score \u2265 threshold \u2192 ATTACK. Raise to reduce false positives; lower to catch more attacks. |\n| **p95 Latency** | 95th-percentile time to score one trace (featurize + IF + VAE). Under 50 ms is healthy for the current event rate. |"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        },
+        {
+          "id": 102,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 15,
+            "x": 0,
+            "h": 3,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "Each data point represents one **completed process trace**. The **dashed orange line** is the detection threshold \u2014 traces above it are classified as attacks. Score = `0.7 \u00d7 VAE_scaled + 0.3 \u00d7 IF_scaled`. After scaling, the centre of normal behaviour is near 0; attack traces score higher. Spikes near or above the threshold line are worth investigating \u2014 check **Last Attack Trace** for the syscall breakdown."
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        },
+        {
+          "id": 103,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 22,
+            "x": 0,
+            "h": 5,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "| Panel | Meaning |\n|---|---|\n| **Attack Rate %** | Percentage of the last 20 scored traces classified as attacks. Near 100% = pod is *consistently* anomalous, not a one-off spike. |\n| **Consecutive Attack Windows** | Back-to-back attack traces with no normal trace in between. Resets to 0 on the first normal trace. A large count is the strongest attack signal \u2014 sustained anomaly across multiple process executions. |"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        },
+        {
+          "id": 104,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 29,
+            "x": 0,
+            "h": 6,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "**Why the Isolation Forest score is negative for normal pods:**\nsklearn's `decision_function` returns **positive** for normal samples (long path = many splits needed = not easily isolated) and **negative** for anomalies (short path = isolated quickly). We negate it so higher always means more anomalous. Normal pods show IF \u2248 \u22120.10; attacking pods show IF > 0.\n\n**Compare the two models to understand *why* a trace was flagged:**\n- **VAE high + IF low (negative)** \u2192 unusual syscall *sequence* (call order / bigrams atypical, e.g. unexpected execve after socket)\n- **IF high (positive) + VAE low** \u2192 unusual syscall *frequency* (one call dominates far more than normal, e.g. mmap \u00d71000)\n- **Both high** \u2192 strongest attack signal \u2014 both frequency and sequence are anomalous"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        },
+        {
+          "id": 105,
+          "type": "text",
+          "title": "",
+          "gridPos": {
+            "y": 36,
+            "x": 0,
+            "h": 5,
+            "w": 24
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "| Panel | Meaning |\n|---|---|\n| **Windows Scored / min** | Completed process traces scored per minute. Cryptominers score many windows because they spawn many short-lived worker processes. Normal apps score fewer because their processes are longer-lived. |\n| **Inference Latency** | p50 / p95 / p99 scoring time per trace. Spikes in p99 indicate long traces (many syscalls \u2192 more featurization work) or CPU contention on the host. Under 50 ms p95 is healthy. |"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transparent": true
+        }
+      ],
+      "datasource": null,
+      "targets": []
+    },
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Overview",
+      "gridPos": {
+        "y": 1,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "High-level health of the DeSFAM detector. Use these tiles to get an instant read on whether attacks are being detected and whether the detector is running normally."
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Confirmed Attacks",
+      "gridPos": {
+        "y": 2,
+        "x": 0,
+        "h": 4,
+        "w": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(desfam_attacks_total{pod=~\"$pod\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "description": "Cumulative count of confirmed attack traces since the detector started (or since the counter was reset). Compare against \"Pods Under Attack\" for current state: a high total with zero currently under attack means attacks happened earlier but the pod is now quiet."
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Pods Under Attack",
+      "gridPos": {
+        "y": 2,
+        "x": 5,
+        "h": 4,
+        "w": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count(desfam_attack_rate_pct{pod=~\"$pod\"} > 50) or vector(0)",
+          "legendFormat": "pods",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {}
+        },
+        "overrides": []
+      },
+      "description": "Pods with rolling attack rate above 50 % \u2014 meaning more than half of their recent process traces scored above the detection threshold. This is the primary triage signal: zero means quiet; non-zero means investigate immediately."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Pods in Stream",
+      "gridPos": {
+        "y": 2,
+        "x": 10,
+        "h": 4,
+        "w": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count(desfam_pod_events_total > 0) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "description": "Number of distinct pods currently sending syscall events to the detector via Tetragon gRPC. A pod appears here as soon as its first syscall event arrives \u2014 before any scoring occurs. If a pod you expect is missing, check that Tetragon is running on its node and the TracingPolicy is applied."
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Detection Threshold",
+      "gridPos": {
+        "y": 2,
+        "x": 14,
+        "h": 4,
+        "w": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "desfam_threshold",
+          "legendFormat": "threshold",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "description": "The ensemble score boundary used to classify a trace: score \u2265 threshold \u2192 ATTACK, score < threshold \u2192 normal. The score is 0.7 \u00d7 RobustScaled(VAE reconstruction error) + 0.3 \u00d7 RobustScaled(Isolation Forest score). After scaling, typical normal traces cluster around 0; attack traces score higher. The threshold is negative (-0.0132) because the model's normal-vs-attack gap is small (val AUC 0.66 vs paper target 0.92 \u2014 only kernel 5.12 normal data available). Was selected on the validation set by maximising F1. Raise it to reduce false positives; lower it to reduce missed attacks."
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "p95 Scoring Latency",
+      "gridPos": {
+        "y": 2,
+        "x": 19,
+        "h": 4,
+        "w": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(desfam_inference_latency_ms_bucket[2m]))",
+          "legendFormat": "p95",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "description": "95th-percentile time (in milliseconds) to score one completed process trace: featurize (build 149-dim vector) + Isolation Forest predict + VAE encode/decode. p95 = 95% of traces are scored within this time. Under 50 ms is healthy for the current event rate. If this grows consistently above 200 ms the detector may fall behind the live Tetragon stream."
+    },
+    {
+      "id": 23,
+      "type": "bargauge",
+      "title": "Current Anomaly Risk Ranking",
+      "description": "Real-time anomaly score per pod, sorted by severity. Gradient: green (normal) \u2192 yellow (near threshold) \u2192 orange (HIGH) \u2192 red (CRIT). Scores are the IF+VAE ensemble output; positive = anomalous.",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "h": 8,
+        "w": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(desfam_ensemble_score{pod=~\"$pod\"})",
+          "legendFormat": "{{pod}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizHeight": 10,
+        "maxVizWidth": 300,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "text": {}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": -0.2,
+          "max": 0.6,
+          "decimals": 3,
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#37872D",
+                "value": null
+              },
+              {
+                "color": "#E0B400",
+                "value": -0.0132
+              },
+              {
+                "color": "#FF8800",
+                "value": 0.05
+              },
+              {
+                "color": "#C4162A",
+                "value": 0.15
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Anomaly Scores",
+      "gridPos": {
+        "y": 15,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "Per-pod ensemble anomaly scores over time. Each point represents one scored process trace. The dashed orange line is the detection threshold \u2014 traces above it are classified as attacks."
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Ensemble Score per Pod",
+      "gridPos": {
+        "y": 16,
+        "x": 0,
+        "h": 9,
+        "w": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "desfam_ensemble_score{pod=~\"$pod\"}",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "desfam_threshold",
+          "legendFormat": "threshold",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1.5,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "rgba(255, 152, 0, 0.12)",
+                "value": -0.0132
+              },
+              {
+                "color": "rgba(196, 22, 42, 0.20)",
+                "value": 0.15
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "threshold"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    8
+                  ],
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF8800",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "description": "IF+VAE ensemble score per pod over time. Orange dashed line = detection threshold (from validation set). Shaded zone above threshold = alert region. Pure socket-I/O pods (recvfrom/write/close) score HIGH due to domain shift \u2014 cross-check \"Files Accessed\" in the triage table before escalating."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Attack Detection",
+      "gridPos": {
+        "y": 25,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "Derived attack signals: rolling attack rate and consecutive-window filter. Use these to distinguish sustained attacks from brief spikes."
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "Pod Attack State History",
+      "gridPos": {
+        "y": 26,
+        "x": 0,
+        "h": 8,
+        "w": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "desfam_attack_rate_pct{pod=~\"$pod\"}",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "left",
+        "rowHeight": 0.85,
+        "legend": {
+          "displayMode": "none",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__field.labels.pod}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 75,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "description": "Per-pod attack state over time. Red = confirmed attack window (ensemble score > threshold, consecutive \u2265 configured minimum). Use this to spot sustained attacks vs. isolated spikes."
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Component Scores",
+      "gridPos": {
+        "y": 34,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "Individual scores from the two models that feed the ensemble. Useful for diagnosing why the ensemble score is high: is it driven by reconstruction error (VAE), path-length anomaly (IF), or both?"
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "VAE Reconstruction Error",
+      "gridPos": {
+        "y": 35,
+        "x": 0,
+        "h": 8,
+        "w": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "desfam_vae_score{pod=~\"$pod\"}",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1.5,
+            "fillOpacity": 8,
+            "gradientMode": "opacity",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Mean-squared reconstruction error from the Variational Autoencoder. Trained exclusively on normal DongTing kernel-fuzzing sequences. High error \u2192 sequence structure deviates from training distribution. Values >0.5 on .NET/nginx workloads indicate domain/covariate shift (likely FP), not necessarily a real attack."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Isolation Forest Score",
+      "gridPos": {
+        "y": 35,
+        "x": 12,
+        "h": 8,
+        "w": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "desfam_iforest_score{pod=~\"$pod\"}",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1.5,
+            "fillOpacity": 8,
+            "gradientMode": "opacity",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Isolation Forest anomaly score (negative: more negative = more isolated = more anomalous). Trained on normal sequences only (contamination=0.02, 300 trees). Less sensitive to domain shift than VAE \u2014 uses relative depth, not absolute reconstruction. Weighted 30% in the ensemble (\u03b1=0.7 for VAE)."
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Performance",
+      "gridPos": {
+        "y": 43,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "Detector throughput and latency. Use this section to verify the detector is keeping up with the event rate and to spot performance regressions after config changes."
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Windows Scored (per minute)",
+      "gridPos": {
+        "y": 44,
+        "x": 0,
+        "h": 8,
+        "w": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(desfam_windows_total{pod=~\"$pod\"}[1m]) * 60",
+          "legendFormat": "{{pod}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Rate of complete syscall windows scored per minute. A window is emitted on process exit, max-length hit, or idle timeout."
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Syscall Events / min",
+      "description": "Raw syscall events ingested from Tetragon gRPC stream per minute. Spike = high-activity process (e.g., bulk I/O, exec burst).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "y": 44,
+        "x": 8,
+        "h": 8,
+        "w": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(desfam_events_total[1m]) * 60",
+          "legendFormat": "events/min",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "fixedColor": "blue",
+            "mode": "fixed"
+          },
+          "custom": {
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "line",
+            "gradientMode": "none",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "none",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Inference Latency Percentiles",
+      "gridPos": {
+        "y": 44,
+        "x": 16,
+        "h": 8,
+        "w": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(desfam_inference_latency_ms_bucket[2m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(desfam_inference_latency_ms_bucket[2m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(desfam_inference_latency_ms_bucket[2m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "links": [
+          {
+            "title": "Filter to this pod",
+            "url": "/d/desfam-v1?orgId=1&var-pod=${__series.name}&${__url_time_range}",
+            "targetBlank": false
+          },
+          {
+            "title": "Show all pods",
+            "url": "/d/desfam-v1?orgId=1&var-pod=All&${__url_time_range}",
+            "targetBlank": false
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "ML inference latency distribution: feature extraction + IF score + VAE encode/decode. p95 < 50ms is acceptable for real-time detection."
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Attack Sequences",
+      "gridPos": {
+        "y": 52,
+        "x": 0,
+        "h": 1,
+        "w": 24
+      },
+      "collapsed": false,
+      "description": "Syscall-level evidence for confirmed attacks. Shows what the model actually saw inside the anomalous process trace."
+    },
+    {
+      "id": 21,
+      "type": "table",
+      "title": "Last Attack \u2014 Full Triage Detail",
+      "description": "One row per pod. Shows severity, anomaly score, top syscalls, deduplicated sequence prefix, files opened (openat), and binaries executed (execve). Empty paths/execs = pure network I/O attack (likely FP for web services).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "targets": [
+        {
+          "expr": "desfam_last_attack_detail",
+          "legendFormat": "{{pod}}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "pod",
+                "severity",
+                "Value",
+                "top_syscalls",
+                "seq_prefix",
+                "seq_len",
+                "paths",
+                "execs"
+              ]
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "pod": "Pod",
+              "severity": "Severity",
+              "Value": "Score",
+              "top_syscalls": "Top Syscalls",
+              "seq_prefix": "Syscall Sequence (prefix)",
+              "seq_len": "Seq Len",
+              "paths": "Files Accessed",
+              "execs": "Binaries Executed"
+            },
+            "indexByName": {
+              "pod": 0,
+              "severity": 1,
+              "Value": 2,
+              "top_syscalls": 3,
+              "seq_prefix": 4,
+              "seq_len": 5,
+              "paths": 6,
+              "execs": 7
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": [
+              {
+                "desc": true,
+                "displayName": "Score"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "displayMode": "auto",
+            "filterable": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pod"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 65
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "CRIT": {
+                        "text": "CRIT",
+                        "color": "#e02f44",
+                        "index": 0
+                      },
+                      "HIGH": {
+                        "text": "HIGH",
+                        "color": "#ff780a",
+                        "index": 1
+                      },
+                      "MED": {
+                        "text": "MED",
+                        "color": "#fade2a",
+                        "index": 2
+                      },
+                      "LOW": {
+                        "text": "LOW",
+                        "color": "#37872d",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Score"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 65
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.05
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.15
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.thresholdsStyle",
+                "value": {
+                  "mode": "background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Top Syscalls"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Syscall Sequence (prefix)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 320
+              },
+              {
+                "id": "custom.wrap",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Seq Len"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 65
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Files Accessed"
+            },
+            "properties": [
+              {
+                "id": "custom.wrap",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Binaries Executed"
+            },
+            "properties": [
+              {
+                "id": "custom.wrap",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "frameIndex": 0
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "security",
+    "desfam",
+    "syscall",
+    "anomaly-detection",
+    "kubernetes",
+    "ebpf"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "pod",
+        "type": "query",
+        "label": "Pod",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(desfam_pod_events_total{pod=~\"dev/.*\"}, pod)",
+        "query": {
+          "query": "label_values(desfam_pod_events_total{pod=~\"dev/.*\"}, pod)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "hide": 0,
+        "options": []
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "DeSFAM \u2014 Runtime Syscall Anomaly Detection",
+  "uid": "desfam-v1",
+  "version": 1
+}
