@@ -19,9 +19,6 @@ ENV TF_CPP_MIN_LOG_LEVEL=2
 
 # Artifacts are mounted at runtime — not baked in
 ENV ARTIFACTS_DIR=/artifacts
-ENV TARGET_NAMESPACE=demo
-ENV KERNEL_VER=6.17
-ENV TETRAGON_ADDR=10.200.118.136:30321
 
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
 USER appuser

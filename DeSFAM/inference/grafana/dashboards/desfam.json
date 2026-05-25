@@ -33,7 +33,7 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "## DeSFAM \u2014 Syscall Anomaly Detection Dashboard\n\n**How scoring works:** Tetragon (eBPF) captures every syscall made by each container. When a process exits, its full syscall trace is scored by two models and combined into one ensemble score.\n\n| Component | What it measures | High score means |\n|---|---|---|\n| **Isolation Forest (IF)** | Unusual syscall *frequency* \u2014 anomalies isolated in fewer tree splits | Call frequencies are far from normal |\n| **VAE (Autoencoder)** | Unusual syscall *sequence patterns* \u2014 trained on normal traces only | Sequence structure doesn't match normal behavior |\n| **Ensemble** | `0.7 \u00d7 RobustScaled(VAE error) + 0.3 \u00d7 RobustScaled(IF score)` | Combined anomaly signal |\n\n**Why scores can be negative:** Both scalers are centred on the *median* of normal training scores, so a typical normal trace scores near 0. Traces scoring below 0 are more-normal-than-average.\n\n**Threshold (0.08):** The model was trained on DongTing cluster data. This cluster's normal baseline differs slightly \u2014 live calibration showed normal pods score \u2248 0.05\u20130.06. Threshold is set to 0.08 to avoid constant false positives; genuine attacks (e.g. mass `clone` calls, large VAE error) score \u2265 0.10.\n\n**Why the IF score is negative for normal pods:** sklearn's `decision_function` returns **positive** for normal samples (long path through trees = not easily isolated) and **negative** for anomalies (short path = isolated quickly). We negate it so that *higher always means more anomalous*. A healthy pod shows IF \u2248 \u22120.10 (normal); an attacking pod shows IF > 0 (anomalous).\n\n> **Quick investigation guide:** High consecutive attacks \u2192 sustained, not a false positive. Check **Last Attack Trace \u2192 Top Syscalls** for behavioural evidence (e.g. `mmap\u00d71000` = memory abuse \u00b7 `connect\u00d7100` = port scan \u00b7 `openat\u00d750` = file snooping)."
+            "content": "## DeSFAM \u2014 Syscall Anomaly Detection Dashboard\n\n**How scoring works:** Tetragon (eBPF) captures every syscall made by each container. When a process exits, its full syscall trace is scored by two models and combined into one ensemble score.\n\n| Component | What it measures | High score means |\n|---|---|---|\n| **Isolation Forest (IF)** | Unusual syscall *frequency* \u2014 anomalies isolated in fewer tree splits | Call frequencies are far from normal |\n| **VAE (Autoencoder)** | Unusual syscall *sequence patterns* \u2014 trained on normal traces only | Sequence structure doesn't match normal behavior |\n| **Ensemble** | `0.7 \u00d7 RobustScaled(VAE error) + 0.3 \u00d7 RobustScaled(IF score)` | Combined anomaly signal |\n\n**Why scores can be negative:** Both scalers are centred on the *median* of normal training scores, so a typical normal trace scores near 0. Traces scoring below 0 are more-normal-than-average.\n\n**Threshold (0.0197):** The model was trained on DongTing cluster data. This cluster's normal baseline differs slightly \u2014 live calibration showed normal pods score \u2248 0.05\u20130.06. Threshold is set to 0.0197 (the 99th-percentile of live dev-cluster scores during 2-minute calibration). Most pods score near `-0.06`; only the top 1% breach 0.02. Genuine attacks should score \u2265 0.05.\n\n**Why the IF score is negative for normal pods:** sklearn's `decision_function` returns **positive** for normal samples (long path through trees = not easily isolated) and **negative** for anomalies (short path = isolated quickly). We negate it so that *higher always means more anomalous*. A healthy pod shows IF \u2248 \u22120.10 (normal); an attacking pod shows IF > 0 (anomalous).\n\n> **Quick investigation guide:** High consecutive attacks \u2192 sustained, not a false positive. Check **Last Attack Trace \u2192 Top Syscalls** for behavioural evidence (e.g. `mmap\u00d71000` = memory abuse \u00b7 `connect\u00d7100` = port scan \u00b7 `openat\u00d750` = file snooping)."
           },
           "fieldConfig": {
             "defaults": {},
@@ -53,7 +53,7 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "| Panel | Meaning |\n|---|---|\n| **Total Attack Events** | Cumulative attack-classified traces since detector start. Resets on restart. Filter by Pod (top of page) to see per-pod totals. |\n| **Pods in Stream** | Pods sending syscall events via Tetragon. Appears immediately on first event \u2014 before any scoring. |\n| **Pods Scored** | Pods with at least one completed process trace scored. Lower than \"in stream\" if some processes haven't exited yet. |\n| **Detection Threshold** | Ensemble score cut-off: score \u2265 threshold \u2192 ATTACK. Raise to reduce false positives; lower to catch more attacks. |\n| **p95 Latency** | 95th-percentile time to score one trace (featurize + IF + VAE). Under 50 ms is healthy for the current event rate. |"
+            "content": "| Panel | Meaning |\n|---|---|\n| **Total Attack Events** | Cumulative attack-classified traces since detector start. Resets on restart. Filter by Pod (top of page) to see per-pod totals. |\n| **Pods in Stream** | Pods sending syscall events via Tetragon. Appears immediately on first event \u2014 before any scoring. |\n| **Pods Scored** | Pods with at least one length-15 window scored. Lower than \"in stream\" if some processes haven't exited yet. |\n| **Detection Threshold** | Ensemble score cut-off: score \u2265 threshold \u2192 ATTACK. Raise to reduce false positives; lower to catch more attacks. |\n| **p95 Latency** | 95th-percentile time to score one trace (featurize + IF + VAE). Under 50 ms is healthy for the current event rate. |"
           },
           "fieldConfig": {
             "defaults": {},
@@ -73,7 +73,7 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "Each data point represents one **completed process trace**. The **dashed orange line** is the detection threshold \u2014 traces above it are classified as attacks. Score = `0.7 \u00d7 VAE_scaled + 0.3 \u00d7 IF_scaled`. After scaling, the centre of normal behaviour is near 0; attack traces score higher. Spikes near or above the threshold line are worth investigating \u2014 check **Last Attack Trace** for the syscall breakdown."
+            "content": "Each data point represents one **length-15 syscall window** (stride 3, per-PID). With 12 of 15 syscalls overlapping between adjacent windows, a single long-running process generates many overlapping data points. The **dashed orange line** is the detection threshold \u2014 traces above it are classified as attacks. Score = `0.7 \u00d7 VAE_scaled + 0.3 \u00d7 IF_scaled`. After scaling, the centre of normal behaviour is near 0; attack traces score higher. Spikes near or above the threshold line are worth investigating \u2014 check **Last Attack Trace** for the syscall breakdown."
           },
           "fieldConfig": {
             "defaults": {},
@@ -133,7 +133,7 @@
           },
           "options": {
             "mode": "markdown",
-            "content": "| Panel | Meaning |\n|---|---|\n| **Windows Scored / min** | Completed process traces scored per minute. Cryptominers score many windows because they spawn many short-lived worker processes. Normal apps score fewer because their processes are longer-lived. |\n| **Inference Latency** | p50 / p95 / p99 scoring time per trace. Spikes in p99 indicate long traces (many syscalls \u2192 more featurization work) or CPU contention on the host. Under 50 ms p95 is healthy. |"
+            "content": "| Panel | Meaning |\n|---|---|\n| **Windows Scored / min** | Length-15 syscall windows scored per minute. With stride 3, every active PID emits ~1 window per 3 syscalls \u2014 busy pods (network proxies, web servers) score thousands per minute; idle pods score zero. |\n| **Inference Latency** | p50 / p95 / p99 scoring time per trace. Spikes in p99 indicate bursty PIDs (many windows emitted in one batch) or CPU contention on the host. Under 50 ms p95 is healthy. |"
           },
           "fieldConfig": {
             "defaults": {},
@@ -389,7 +389,7 @@
         },
         "overrides": []
       },
-      "description": "The ensemble score boundary used to classify a trace: score \u2265 threshold \u2192 ATTACK, score < threshold \u2192 normal. The score is 0.7 \u00d7 RobustScaled(VAE reconstruction error) + 0.3 \u00d7 RobustScaled(Isolation Forest score). After scaling, typical normal traces cluster around 0; attack traces score higher. The threshold is negative (-0.0132) because the model's normal-vs-attack gap is small (val AUC 0.66 vs paper target 0.92 \u2014 only kernel 5.12 normal data available). Was selected on the validation set by maximising F1. Raise it to reduce false positives; lower it to reduce missed attacks."
+      "description": "The ensemble score boundary used to classify a length-15 syscall window: score \u2265 threshold \u2192 ATTACK, score < threshold \u2192 normal. The score is 0.7 \u00d7 RobustScaled(VAE reconstruction error) + 0.3 \u00d7 RobustScaled(Isolation Forest score). After scaling, typical normal windows cluster near zero; attack windows score higher. The threshold (0.0197) was calibrated against 2 minutes of live dev-cluster traffic and is the 99th-percentile of observed prod scores \u2014 only the top 1% triggers alerts. Raise it to reduce false positives; lower it to catch more anomalies."
     },
     {
       "id": 5,
@@ -512,7 +512,7 @@
               },
               {
                 "color": "#E0B400",
-                "value": -0.0132
+                "value": 0.0197
               },
               {
                 "color": "#FF8800",
@@ -520,7 +520,7 @@
               },
               {
                 "color": "#C4162A",
-                "value": 0.15
+                "value": 0.05
               }
             ]
           }
@@ -615,11 +615,11 @@
               },
               {
                 "color": "rgba(255, 152, 0, 0.12)",
-                "value": -0.0132
+                "value": 0.0197
               },
               {
                 "color": "rgba(196, 22, 42, 0.20)",
-                "value": 0.15
+                "value": 0.05
               }
             ]
           }
@@ -1383,7 +1383,7 @@
                     },
                     {
                       "color": "red",
-                      "value": 0.15
+                      "value": 0.05
                     }
                   ]
                 }

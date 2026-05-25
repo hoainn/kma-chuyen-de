@@ -30,6 +30,17 @@ services:
       SYSCALL_TBL: /data/dongting_repo/syscall_64.tbl
       OUTPUT_DIR:  /model
       TF_CPP_MIN_LOG_LEVEL: "2"
+      PYTHONUNBUFFERED: "1"
+      # Sliding-window training (paper §IV.B.1)
+      USE_SLIDING_WINDOW: "1"
+      WINDOW_LEN:    "15"
+      WINDOW_STRIDE: "3"
+      # Categorical syscall frequencies (paper §IV.B.1)
+      USE_CATEGORIES: "1"
+      # Cap on windows PER SPLIT (train/val/test get the same cap). DongTing's
+      # long attack traces would otherwise expand the train split alone to
+      # 127 M windows. 2 M × 159 × 4 B ≈ 1.3 GB per split.
+      MAX_WINDOWS_PER_SPLIT: "2000000"
     working_dir: /workspace
     command: python train.py
 

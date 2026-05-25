@@ -1,8 +1,0 @@
-[NbConvertApp] Converting notebook desfam_repro.ipynb to notebook
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-W0000 00:00:1779121661.142276    1251 cpu_allocator_impl.cc:82] Allocation of 178171392 exceeds 10% of free system memory.
-W0000 00:00:1779121661.185632    1251 cpu_allocator_impl.cc:82] Allocation of 178171392 exceeds 10% of free system memory.
-W0000 00:00:1779121661.325038    1251 cpu_allocator_impl.cc:82] Allocation of 178171392 exceeds 10% of free system memory.
-W0000 00:00:1779121661.610934    1251 cpu_allocator_impl.cc:82] Allocation of 178171392 exceeds 10% of free system memory.
-W0000 00:00:1779121661.629169    1251 cpu_allocator_impl.cc:82] Allocation of 178171392 exceeds 10% of free system memory.
-[NbConvertApp] Writing 182760 bytes to desfam_repro.ipynb

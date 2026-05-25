@@ -51,7 +51,12 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
         top_ngrams = [tuple(g) for g in raw_ng]
         ngram_n  = int(fe.get("ngram_n", 2))
         ver_cols = fe.get("ver_cols", [])
-        input_dim = len(top_ids) + len(disc_ids) + 8 + len(top_ngrams) + len(ver_cols)
+        cat_cols = fe.get("cat_cols", [])
+        # syscall_id_to_cat is serialised with stringified int keys (JSON limit).
+        raw_id2cat = fe.get("syscall_id_to_cat", {}) or {}
+        id_to_cat: dict[int, str] = {int(k): v for k, v in raw_id2cat.items()}
+        input_dim = (len(top_ids) + len(disc_ids) + 8 + len(top_ngrams)
+                     + len(ver_cols) + len(cat_cols))
     elif fc_path:
         raw_fc = json.loads(open(fc_path).read())
         if "top_syscalls" in raw_fc and raw_fc["top_syscalls"]:
@@ -62,7 +67,11 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
             top_ngrams = [tuple(g) for g in raw_ng]
             ngram_n  = int(raw_fc.get("ngram_n", 2))
             ver_cols = raw_fc.get("kernel_versions", [])
-            input_dim = len(top_ids) + len(disc_ids) + 8 + len(top_ngrams) + len(ver_cols)
+            cat_cols = raw_fc.get("cat_cols", [])
+            raw_id2cat = raw_fc.get("syscall_id_to_cat", {}) or {}
+            id_to_cat = {int(k): v for k, v in raw_id2cat.items()}
+            input_dim = (len(top_ids) + len(disc_ids) + 8 + len(top_ngrams)
+                         + len(ver_cols) + len(cat_cols))
         else:
             raise RuntimeError(
                 f"feature_config.json at {fc_path} has no top_syscalls. "
@@ -76,7 +85,8 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
 
     log.info(
         f"  vocab: freq={len(top_ids)} disc={len(disc_ids)} "
-        f"{ngram_n}-grams={len(top_ngrams)} ver_bins={len(ver_cols)} → input_dim={input_dim}"
+        f"{ngram_n}-grams={len(top_ngrams)} ver_bins={len(ver_cols)} "
+        f"cat={len(cat_cols)} → input_dim={input_dim}"
     )
 
     # ── Feature scaler ────────────────────────────────────────────────────────
@@ -173,6 +183,8 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
         "top_ngrams":    top_ngrams,
         "ngram_n":       ngram_n,
         "ver_cols":      ver_cols,
+        "cat_cols":      cat_cols,
+        "id_to_cat":     id_to_cat,
         "input_dim":     input_dim,
         "feature_scaler": feature_scaler,
         "iforest":       iforest,

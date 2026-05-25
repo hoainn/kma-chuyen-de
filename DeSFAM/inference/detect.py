@@ -49,12 +49,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--namespace",      default=os.environ.get("TARGET_NAMESPACE", "demo"))
     p.add_argument("--kernel-ver",     default=os.environ.get("KERNEL_VER",      "6.17"))
     p.add_argument("--threshold",      type=float, default=float(os.environ.get("THRESHOLD", "0")))
-    p.add_argument("--min-seq-len",    type=int,   default=int(os.environ.get("MIN_SEQ_LEN",   "8")))
-    p.add_argument("--max-seq-len",    type=int,   default=int(os.environ.get("MAX_SEQ_LEN",   "5000")))
+    p.add_argument("--window-len",     type=int,   default=int(os.environ.get("WINDOW_LEN",    "15")))
+    p.add_argument("--window-stride",  type=int,   default=int(os.environ.get("WINDOW_STRIDE", "3")))
     p.add_argument("--max-idle-secs",  type=float, default=float(os.environ.get("MAX_IDLE_SECS", "30")))
     p.add_argument("--flush-interval", type=float, default=float(os.environ.get("FLUSH_INTERVAL", "5")))
     p.add_argument("--alert-consecutive", type=int, default=int(os.environ.get("ALERT_CONSECUTIVE", "1")))
-    p.add_argument("--calibrate-secs", type=float, default=0.0)
+    p.add_argument("--calibrate-secs", type=float, default=float(os.environ.get("CALIBRATE_SECS", "0")))
     p.add_argument("--scores-only",    action="store_true", default=os.environ.get("SCORES_ONLY", "") == "1")
     p.add_argument("--log-features",   default=None, help="Path to write feature vectors as Parquet (optional)")
     p.add_argument("--verbose",        action="store_true")
@@ -102,8 +102,8 @@ def main() -> None:
 
     extractor  = Extractor(args.tetragon_addr, args.namespace, log)
     windower   = Windower(
-        min_len      = args.min_seq_len,
-        max_len      = args.max_seq_len,
+        window_len   = args.window_len,
+        window_stride= args.window_stride,
         max_idle_secs= args.max_idle_secs,
     )
     featurizer = Featurizer(
@@ -112,6 +112,8 @@ def main() -> None:
         top_ngrams    = artifacts["top_ngrams"],
         ngram_n       = artifacts["ngram_n"],
         ver_cols      = artifacts["ver_cols"],
+        cat_cols      = artifacts.get("cat_cols"),
+        id_to_cat     = artifacts.get("id_to_cat"),
         input_dim     = artifacts["input_dim"],
         feature_scaler= artifacts["feature_scaler"],
         log_path      = args.log_features,
@@ -132,7 +134,7 @@ def main() -> None:
     )
 
     log.info(
-        f"Ready — min_seq={args.min_seq_len} max_seq={args.max_seq_len} "
+        f"Ready — window_len={args.window_len} stride={args.window_stride} "
         f"max_idle={args.max_idle_secs}s flush_every={args.flush_interval}s "
         f"threshold={threshold:.4f} kernel={args.kernel_ver}"
     )

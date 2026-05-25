@@ -23,11 +23,15 @@ class Featurizer:
         ngram_n: int = 2,
         feature_scaler=None,
         log_path: str | None = None,
+        cat_cols: list[str] | None = None,
+        id_to_cat: dict[int, str] | None = None,
     ):
         self._top_ids    = top_ids
         self._disc_ids   = disc_ids
         self._top_ngrams = top_ngrams
         self._ver_cols   = ver_cols
+        self._cat_cols   = cat_cols or []
+        self._id_to_cat  = id_to_cat or {}
         self._input_dim  = input_dim
         self._ngram_n    = ngram_n
         self._feature_scaler = feature_scaler
@@ -37,10 +41,12 @@ class Featurizer:
         self._top_idx  = {sc: i for i, sc in enumerate(top_ids)}
         self._disc_idx = {sc: i for i, sc in enumerate(disc_ids)}
         self._ng_idx   = {g: i for i, g in enumerate(top_ngrams)}
+        self._cat_idx  = {c: i for i, c in enumerate(self._cat_cols)}
 
         self._n_freq = len(top_ids)
         self._n_disc = len(disc_ids)
         self._n_ng   = len(top_ngrams)
+        self._n_cat  = len(self._cat_cols)
 
     def transform(self, seq_ids: list[int], kernel_ver: str) -> np.ndarray:
         """Build 174-dim feature vector from a syscall sequence."""
@@ -106,6 +112,16 @@ class Featurizer:
             if v == ver_short:
                 X[ver_off + i] = 1.0
                 break
+
+        # cat_K: per-category syscall frequencies (paper §IV.B.1)
+        if self._n_cat > 0 and self._id_to_cat:
+            cat_off = ver_off + len(self._ver_cols)
+            for sc in seq_ids:
+                c = self._id_to_cat.get(sc, 'other')
+                ci = self._cat_idx.get(c)
+                if ci is not None:
+                    X[cat_off + ci] += 1
+            X[cat_off: cat_off + self._n_cat] /= max(total, 1)
 
         feat = X[:self._input_dim].astype(np.float32).reshape(1, -1)
 

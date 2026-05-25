@@ -1,4 +1,0 @@
-Model,ROC-AUC,Avg Prec,F1 (Attack),Precision,Recall
-Isolation Forest,0.8824,0.9488,0.9151,0.848,0.9939
-VAE,0.9954,0.9956,0.9954,0.9915,0.9994
-Ensemble α=0.7,0.8848,0.9485,0.9151,0.848,0.9939

@@ -2,3 +2,12 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Large datasets (download separately)
+DongTing/
+
+# Local backups
+DeSFAM/model.full_trace_backup/
+
+# Logs
+*.log
