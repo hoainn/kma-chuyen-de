@@ -20,9 +20,17 @@ class Scorer:
         self._iforest    = iforest
         self._encoder    = encoder
         self._decoder    = decoder
-        self._threshold  = threshold
+        self._threshold  = float(threshold)
         self._ensemble   = ensemble
         self._legacy_norm = legacy_norm
+
+    @property
+    def threshold(self) -> float:
+        return self._threshold
+
+    def set_threshold(self, t: float) -> None:
+        """Mutate the active cut-off — used by the EMA loop in detect.py."""
+        self._threshold = float(t)
 
     def score(self, feat: np.ndarray) -> dict:
         """Score a (1, input_dim) feature array. Returns dict with if_raw, vae_raw, ensemble, is_attack."""

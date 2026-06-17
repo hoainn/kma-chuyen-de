@@ -1,0 +1,71 @@
+\section{Cơ sở lý thuyết và công trình liên quan}
+\label{sec:related}
+
+\subsection{Leo thang đặc quyền trong multi-tenant Kubernetes}
+Trong cụm Kubernetes nhiều người thuê, các tenant được cô lập mức logic bằng
+namespace nhưng chia sẻ chung nhân của nút. Bề mặt nguy hiểm nhất là \emph{leo
+thang đặc quyền} và \emph{thoát container}: tận dụng lỗ hổng nhân hoặc cấu hình
+sai (capabilities dư thừa, mount host-path, \texttt{ptrace}, \texttt{unshare}/
+\texttt{setns}, nạp mô-đun nhân) để vượt ranh giới tenant và chiếm quyền trên
+nút~\cite{ref5_combe_docker}. Mọi con đường này đều biểu hiện thành các
+\emph{chuỗi syscall đặc quyền} đặc trưng, nên phân tích syscall là điểm quan sát
+tự nhiên để phát hiện chúng.
+
+\subsection{Bảo mật lời gọi hệ thống cho container}
+Trong mô hình chia sẻ nhân, nhân Linux phơi bày hàng trăm syscall, phần lớn không
+cần thiết cho một khối lượng công việc cụ thể, làm phình to bề mặt tấn
+công~\cite{ref11_shu_security}. Các cơ chế truyền thống (seccomp, AppArmor,
+SELinux) lọc theo chính sách tĩnh nên: (1) không thích nghi với hành vi thời gian
+chạy; (2) thiếu nhận thức về \emph{chuỗi} syscall nên mù với tấn công nhiều bước;
+và (3) tốn chi phí cấu hình thủ công ở quy mô lớn.
+
+\subsection{Sinh danh sách syscall và lọc động}
+Confine~\cite{ref31_confine} dùng phân tích tĩnh để rút gọn hồ sơ seccomp (SRR
+$\approx 47{,}6\%$) nhưng không thích nghi thời gian chạy.
+Prof-gen~\cite{ref36_profgen} kết hợp theo dõi lúc khởi động với đồ thị lời gọi
+tĩnh, vẫn bỏ sót thay đổi hành vi về sau. Optimus~\cite{ref27_optimus} và
+KubeRosy~\cite{ref29_kuberosy} dùng eBPF để cập nhật chính sách thời gian chạy,
+song Optimus cần phê duyệt thủ công và KubeRosy gắn chặt với Kubernetes.
+NIMOS~\cite{ref38_nimos} đánh giá giá trị của lọc dựa trên chuỗi. DeSFAM định vị
+mình ở chỗ hợp nhất cả ba: lập hồ sơ lai, phát hiện bất thường học máy, và thực
+thi trong nhân.
+
+\subsection{Phát hiện xâm nhập dựa trên chuỗi syscall}
+Hướng phát hiện bất thường dựa trên chuỗi syscall có lịch sử lâu dài, khởi nguồn
+từ ``a sense of self''~\cite{forrest1996sense,hofmeyr1998ids} và các mô hình thay
+thế~\cite{warrender1999detecting}, cùng cảnh báo kinh điển về tấn công bắt
+chước~\cite{wagner2002mimicry}. Các hướng hiện đại gồm phương pháp ngữ
+nghĩa~\cite{creech2014semantic}, túi lời gọi (BoSC) cho
+container~\cite{abed2015bag}, và học sâu một lớp/biến phân như
+DAGMM~\cite{zong2018dagmm}, Deep SVDD~\cite{ruff2018deepsvdd},
+HIDS học sâu~\cite{haider2021deep}. Riêng cho container có các đánh giá phát hiện
+bất thường~\cite{castanhel2021peek} và ngữ cảnh hóa syscall~\cite{elkhairi2022chids},
+cũng như tập hợp Random/Isolation Forest~\cite{bsoul2022ensemble}. SyscallAD của
+DeSFAM nằm trong dòng này: hợp nhất VAE~\cite{vae_kingma} (lỗi tái cấu trúc) với
+iForest~\cite{iforest_liu} (ngoại lệ thống kê), bổ sung khớp mẫu lành tính bằng
+PrefixSpan~\cite{prefixspan_pei}.
+
+\subsection{Bộ dữ liệu DongTing}
+DongTing~\cite{ref26_dongtingdataset} là bộ dữ liệu quy mô lớn gồm các chuỗi
+syscall của nhân Linux được gán nhãn bình thường/độc hại (theo các bản vá lỗi
+syzkaller), thích hợp cho huấn luyện và xác nhận bộ phát hiện bất thường. Chuyên
+đề này dùng DongTing làm nguồn dữ liệu ngoại tuyến duy nhất, đúng như DeSFAM.
+
+\subsection{eBPF và Tetragon}
+eBPF cho phép nạp logic giám sát/thực thi an toàn vào nhân tại các điểm vào syscall
+với chi phí thấp~\cite{ref20_bpf_security}. DeSFAM dùng eBPF/LSM để chặn nội tuyến.
+Trong chuyên đề này, thay vì tự viết chương trình eBPF, chúng tôi dùng
+Tetragon~\cite{tetragon} (thuộc hệ sinh thái Cilium~\cite{cilium})---một lớp quan
+sát và thực thi bảo mật dựa trên eBPF cho Kubernetes---làm \emph{cảm biến syscall}
+phát sự kiện qua gRPC. Đây là lựa chọn thực dụng để hiện thực hóa lớp thu thập của
+DeSFAM mà không cần sửa nhân.
+
+\subsection{Vị trí của chuyên đề}
+Chuyên đề kế thừa DeSFAM như một \emph{công trình tham chiếu} cho thiết kế lõi phát
+hiện bất thường syscall, và vận dụng nó để xây dựng một \emph{cơ chế phát hiện leo
+thang đặc quyền} cho ngữ cảnh multi-tenant Kubernetes---một ngữ cảnh mà DeSFAM
+không đặt trọng tâm. Đóng góp nằm ở chỗ: (i) định vị các đặc trưng syscall đặc
+quyền làm tín hiệu cho leo thang đặc quyền; (ii) hiện thực hóa cơ chế thành một bộ
+phát hiện trực tiếp giám sát theo namespace trên Tetragon/Kubernetes, lấp khoảng
+trống ``từ mô phỏng đến triển khai''; và (iii) đối chiếu trung thực hiệu năng với
+số liệu công bố của công trình tham chiếu.

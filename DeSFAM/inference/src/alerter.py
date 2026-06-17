@@ -53,10 +53,21 @@ class Alerter:
         scores_only: bool = False,
         calibrate_secs: float = 0.0,
     ):
-        self._threshold      = threshold
+        self._threshold      = float(threshold)
         self._consecutive    = consecutive
         self._scores_only    = scores_only
         self._calibrate_secs = calibrate_secs
+        # (group, idx_in_group, semantic_name) per feature dim, set by detect.py
+        self._feature_dim_names: list[tuple[str, int, str]] = []
+        # Per-pod last (group,idx,name) labelsets we set, so they can be cleared
+        # on the next confirmed attack.
+        self._last_feature_labels: dict[str, list[tuple[str, str, str]]] = {}
+
+        # Rolling history: per-pod deque of recent attack records. Each entry is
+        # (attack_id, [(group, summary), ...]) so the next attack at this slot
+        # knows which labelsets to evict from the history gauges.
+        self._history_max = 20
+        self._attack_history: dict[str, collections.deque] = {}
 
         self._consec_attack: dict[str, int]           = collections.defaultdict(int)
         self._recent: dict[str, collections.deque]    = {}   # rolling is_attack bools
@@ -67,6 +78,16 @@ class Alerter:
         self._last_attack_labels: dict[str, tuple[str, str]] = {}
         self._last_args_labels: dict[str, tuple[str, str]] = {}
         self._last_detail_labels: dict[str, tuple] = {}
+
+    def set_threshold(self, t: float) -> None:
+        """Mutate the cut-off used for severity bucketing — kept in sync with
+        the Scorer when detect.py runs the EMA loop (paper §IV.B.3 Eq. 3)."""
+        self._threshold = float(t)
+
+    def set_feature_dim_names(self, names: list[tuple[str, int, str]]) -> None:
+        """Per-dimension (group, idx, semantic_name) for the loaded vector.
+        Used to label the desfam_last_attack_feature gauge when an attack fires."""
+        self._feature_dim_names = list(names)
 
     def _rolling_rate(self, pod_key: str) -> int:
         """Return attack % over the last _RATE_WINDOW windows for this pod."""
@@ -176,6 +197,79 @@ class Alerter:
                     paths=paths_str, execs=execs_str,
                 ).set(ens)
                 self._last_detail_labels[pod_key] = detail_key
+
+                # ── Full feature vector that the model just flagged ───────────
+                # Emit one series per dimension (scaled value the scorer saw).
+                # Cardinality = feat_dim per pod — bounded; old labelsets are
+                # cleared each time a new attack lands for that pod.
+                feat = result.get("feature_vector")
+                if feat and self._feature_dim_names:
+                    for old in self._last_feature_labels.get(pod_key, []):
+                        try:
+                            _prom.last_attack_feature.remove(pod_key, *old)
+                        except Exception:
+                            pass
+                    new_labels: list[tuple[str, str, str]] = []
+                    for (group, idx, name), val in zip(self._feature_dim_names, feat):
+                        idx_s = str(idx)
+                        # Round to 3 dp at emission — the Grafana table renders
+                        # arrays as JSON and has no per-element decimal control,
+                        # so we trim the float noise here.
+                        _prom.last_attack_feature.labels(
+                            pod=pod_key, group=group, idx=idx_s, name=name
+                        ).set(round(float(val), 3))
+                        new_labels.append((group, idx_s, name))
+                    self._last_feature_labels[pod_key] = new_labels
+
+                    # ── Rolling history (last N attacks per pod) ─────────────
+                    # Pack the whole attack into ONE series: the value =
+                    # ensemble score; six labels carry the per-group
+                    # "dim=val, dim=val" summaries covering ALL dims in that
+                    # group, sorted by |scaled value| desc so the strongest
+                    # contributors appear first. Grafana renders this as a flat
+                    # table — no joins needed.
+                    from collections import defaultdict
+                    per_group: dict[str, list[tuple[str, float]]] = defaultdict(list)
+                    for (group, _idx, name), val in zip(self._feature_dim_names, feat):
+                        per_group[group].append((name, round(float(val), 3)))
+                    summaries = {g: "—" for g in
+                                 ('freq', 'disc', 'stats', 'bigrams', 'cat', 'prefixspan')}
+                    for g, pairs in per_group.items():
+                        if g not in summaries or not pairs:
+                            continue
+                        # Collapse the _x32 ABI suffix into the base kernel name,
+                        # so e.g. `recvfrom`/`recvfrom_x32` (two distinct model
+                        # dims) display as one entry, and bigrams like
+                        # `ioctl_x32→ioctl_x32` collapse to `ioctl→ioctl`. The
+                        # retained variant is the one with the larger |scaled
+                        # value| so the cell order still reflects contribution.
+                        merged: dict[str, float] = {}
+                        for name, v in pairs:
+                            base = name.replace('_x32', '')
+                            prev = merged.get(base)
+                            if prev is None or abs(v) > abs(prev):
+                                merged[base] = v
+                        flat = sorted(merged.items(),
+                                      key=lambda nv: abs(nv[1]), reverse=True)
+                        summaries[g] = ", ".join(n for n, _ in flat)
+                    attack_id = time.strftime(
+                        '%H:%M:%S', time.localtime(time.time()))
+                    label_args = dict(pod=pod_key, attack_id=attack_id, **summaries)
+                    _prom.attack_history.labels(**label_args).set(round(float(ens), 4))
+
+                    # Evict the oldest entry if the buffer is full.
+                    dq = self._attack_history.setdefault(
+                        pod_key, collections.deque(maxlen=self._history_max + 1))
+                    dq.append(label_args)
+                    while len(dq) > self._history_max:
+                        old = dq.popleft()
+                        try:
+                            _prom.attack_history.remove(
+                                old['pod'], old['attack_id'],
+                                old['freq'], old['disc'], old['stats'],
+                                old['bigrams'], old['cat'], old['prefixspan'])
+                        except Exception:
+                            pass
 
         # Update rolling rate
         if pod_key not in self._recent:

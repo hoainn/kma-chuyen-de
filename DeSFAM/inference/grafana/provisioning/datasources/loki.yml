@@ -1,0 +1,17 @@
+apiVersion: 1
+
+# Loki runs in-cluster (ns monitoring) and is exposed via NodePort 31100 on the
+# Tetragon node — the same host the detector reaches for the gRPC NodePort. The
+# Grafana container resolves 10.200.118.136 over the host's tunnel.
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://10.200.118.136:31100
+    editable: false
+    jsonData:
+      maxLines: 300   # the Tetragon export-stdout stream is high-volume
+                      # (~2k lines/min idle, 40k+ under attack); pretty-printing
+                      # 1000 JSON lines/panel/refresh froze the browser. Panels
+                      # also set a per-query line limit of 100.

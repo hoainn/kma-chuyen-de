@@ -8,6 +8,11 @@ DongTing/
 
 # Local backups
 DeSFAM/model.full_trace_backup/
+DeSFAM/model_backups/
 
 # Logs
 *.log
+
+# Claude Prism local app state (history repo + build artifacts)
+.claudeprism/
+.prism/

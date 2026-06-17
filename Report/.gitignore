@@ -1,0 +1,18 @@
+# Sản phẩm biên dịch LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.lof
+*.lot
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+# Giữ lại main.pdf (sản phẩm cuối) — bỏ dòng dưới nếu KHÔNG muốn commit PDF
+# main.pdf
+
+# Claude Prism page-preview images
+_cover.png
+_p2.png

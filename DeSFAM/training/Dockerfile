@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir \
     "scipy>=1.12" \
     "joblib>=1.3" \
     "matplotlib>=3.8" \
-    "pymongo>=4.6" \
+    "openpyxl>=3.1" \
+    "prefixspan>=0.5.2" \
     "jupyter>=1.0" \
     "notebook>=7.0"
 

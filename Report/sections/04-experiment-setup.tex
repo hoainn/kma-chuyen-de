@@ -1,0 +1,90 @@
+\section{Triển khai và thiết lập thực nghiệm}
+\label{sec:setup}
+
+\subsection{Nguyên tắc: mọi công cụ chạy bằng Docker}
+Để bảo đảm khả năng tái lập và không làm ``bẩn'' máy chủ, toàn bộ chuỗi công cụ
+(huấn luyện, suy luận, biên dịch báo cáo) đều chạy trong container. Quy trình
+huấn luyện được đóng gói bằng \texttt{docker-compose}; bộ phát hiện trực tiếp,
+Prometheus và Grafana cũng khởi chạy bằng \texttt{docker-compose}; cụm Kubernetes
+thử nghiệm cài Tetragon qua script.
+
+\subsection{Huấn luyện ngoại tuyến}
+Một nguồn chân lý duy nhất là \texttt{train.py} (mọi hàm học máy, không vẽ đồ
+thị); sổ tay \texttt{train\_dongting.ipynb} nhập lại từ \texttt{train.py} và bổ
+sung đồ thị + bình luận học thuật. Hai chế độ luôn đồng bộ: muốn đổi thuật toán
+chỉ sửa \texttt{train.py}.
+
+\begin{lstlisting}[language=bash]
+cd DeSFAM/training
+# Chạy nhanh, không tương tác:
+docker compose -f docker-compose.pipeline.yml run --rm train
+# Hoặc tương tác (Jupyter Lab :8888):
+docker compose -f docker-compose.pipeline.yml up jupyter
+\end{lstlisting}
+
+Đầu ra (lưu vào \texttt{../model/}) gồm: bộ chuẩn hóa đặc trưng, mô hình iForest,
+trọng số bộ mã hóa/giải mã VAE, các bộ chuẩn hóa điểm thành phần, tham số tập hợp
+($\alpha=0{,}7$), từ vựng đặc trưng (\texttt{fe\_report.json}), và
+\texttt{results.json} (chỉ số + ngưỡng + siêu tham số).
+
+\subsection{Cấu hình tái lập (ghi trong \texttt{results.json})}
+Bảng~\ref{tab:config} liệt kê cấu hình thí nghiệm được lưu vết tự động, giúp người
+đánh giá đối chiếu chính xác.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cấu hình thí nghiệm tái lập (trích \texttt{results.json}).}
+  \label{tab:config}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Tham số} & \textbf{Giá trị} \\
+    \midrule
+    Thí nghiệm & \texttt{dongting\_15\_3} \\
+    Số chuỗi & 18\,874 \\
+    Cửa sổ trượt (độ dài, bước) & $(15,\ 3)$ \\
+    Số cửa sổ huấn luyện / kiểm định / kiểm tra & 90\,456 / 896\,581 / 687\,926 \\
+    Số chiều đặc trưng & 43 \\
+    VAE \texttt{latent\_dim} / \texttt{hidden\_dim} & 8 / 32 \\
+    iForest \texttt{contamination} & 0{,}02 \\
+    Đặc trưng thời gian & không (\texttt{has\_temporal=false}) \\
+    Số mẫu lành tính (PrefixSpan) & 150 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Triển khai trực tiếp trên multi-tenant Kubernetes}
+Cụm thử nghiệm mô phỏng môi trường nhiều người thuê bằng cách cô lập tenant theo
+namespace (mỗi namespace là một tenant); cảm biến giám sát syscall \emph{theo từng
+namespace} để quy kết hành vi về đúng tenant. Cảm biến syscall là
+Tetragon~\cite{tetragon}, cài qua script và áp một chính sách truy vết
+(\texttt{syscall-ad-tracing}) chỉ phát ra 23 syscall an ninh
+(Mục~\ref{sec:methodology}). Bộ phát hiện đọc sự kiện qua gRPC NodePort.
+
+\begin{lstlisting}[language=bash]
+cd DeSFAM/Kubernetes
+bash tetragon/install.sh                       # cai Tetragon + NodePort
+kubectl apply -f tetragon/tracing-policy.yaml  # chinh sach 23 syscall
+bash deploy.sh                                 # workload lanh tinh + tan cong
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash]
+cd DeSFAM/inference
+# Detector + Prometheus + Grafana, dung nguong van hanh da hieu chinh:
+docker compose --env-file .env.uat up -d --build
+\end{lstlisting}
+
+\subsection{Khối lượng công việc và kịch bản tấn công}
+Khối lượng lành tính tiêu biểu là MongoDB (truy vấn CRUD bình thường). Kịch bản
+tấn công trong không gian tên \texttt{demo} mô phỏng các chuỗi đặc quyền (thực thi
+shell bất thường, \texttt{ptrace}, nạp mô-đun, thao tác \texttt{mount/unshare})
+phản ánh các họ CVE thoát container và leo thang đặc quyền như
+CVE-2021-4034~\cite{cve_2021_4034}, CVE-2022-0847~\cite{cve_2022_0847},
+CVE-2019-5736~\cite{cve_2019_5736}. Mục tiêu là quan sát \emph{độ phân tách điểm}
+giữa lành tính và tấn công khi phục vụ trực tiếp, chứ không tuyên bố chặn 14/14
+CVE như công trình tham chiếu (xem Mục~\ref{sec:discussion}).
+
+\subsection{Quan sát}
+Grafana (\texttt{:3000}) hiển thị điểm bất thường theo thời gian và nhật ký sự
+kiện Tetragon (qua Loki); Prometheus (\texttt{:9090}) lưu chuỗi thời gian của điểm
+số và cảnh báo. Đây là kênh quan sát bằng chứng cho phần triển khai trực tiếp
+(Mục~\ref{sec:evaluation}).

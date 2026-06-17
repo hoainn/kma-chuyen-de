@@ -1,0 +1,29 @@
+\section{Kết luận}
+\label{sec:conclusion}
+
+Chuyên đề đã nghiên cứu và hiện thực hóa một \emph{cơ chế phát hiện tấn công leo
+thang đặc quyền} cho môi trường multi-tenant Kubernetes dựa trên phân tích lời gọi
+hệ thống. Cơ chế kế thừa thiết kế lõi phát hiện bất thường SyscallAD (VAE + Rừng cô
+lập) của công trình tham chiếu DeSFAM~\cite{desfam_original}, định vị các đặc trưng
+syscall đặc quyền làm tín hiệu cho leo thang đặc quyền; huấn luyện trên bộ dữ liệu
+công khai DongTing và được triển khai thành một bộ phát hiện chạy trực tiếp bằng
+Tetragon/eBPF giám sát theo namespace trên Kubernetes, toàn bộ đóng gói bằng Docker
+để bảo đảm tái lập.
+
+Các kết quả chính như sau. \emph{Về phát hiện ngoại tuyến}, lõi phát hiện đạt định
+hướng và khả năng xếp hạng tốt (VAE AUC kiểm định $0{,}944$, AP tập hợp $0{,}990$,
+precision $0{,}999$) nhưng còn khác biệt về F1/recall so với mức công bố do ngưỡng
+ưu tiên precision. \emph{Về triển khai trực tiếp}, mô hình giữ được khả năng phân
+tách khi phục vụ trực tiếp (lành tính $\le 0{,}19$ so với các kịch bản leo thang
+đặc quyền $0{,}278$--$0{,}930$), cho phép ngưỡng vận hành $T_0=0{,}25$. \emph{Về
+điều kiện thành công}, yếu tố then chốt là căn chỉnh không gian đặc trưng (bảng chữ
+cái cảm biến 23 syscall) giữa huấn luyện và phục vụ, được ràng buộc bằng kiểm thử
+ngang hàng.
+
+Tóm lại, báo cáo trình bày một cơ chế phát hiện khả thi cho leo thang đặc quyền
+trong multi-tenant Kubernetes, kèm một đối chiếu \emph{trung thực} với công trình
+tham chiếu: chỉ rõ điều gì tương đồng, điều gì khác biệt và vì sao, đồng thời
+lấp khoảng cách ``mô phỏng $\to$ triển khai'' bằng một bộ phát hiện trực tiếp. Hướng
+tiếp theo gồm chọn ngưỡng tối ưu F1, hiện thực hóa khâu chặn trong nhân (Giai đoạn~3)
+để \emph{ngăn chặn} chứ không chỉ phát hiện, mở rộng khối lượng công việc đa tenant
+và dùng khai thác CVE thực trong môi trường cách ly.

@@ -1,0 +1,126 @@
+%==============================================================================
+% Báo cáo Chuyên đề — An toàn Thông tin (KMA)
+% "Nghiên cứu cơ chế phát hiện tấn công leo thang đặc quyền trong môi trường
+%  Multi-tenant Kubernetes dựa trên phân tích System Calls"
+%  (DeSFAM được dùng làm công trình tham chiếu cho thiết kế lõi phát hiện)
+% Học viên: Nguyễn Ngọc Hoài — CHAT4P006
+%
+% Định dạng: báo cáo học thuật một cột, tiếng Việt.
+% Biên dịch: XeLaTeX (qua Docker) — chạy ./build.sh
+%==============================================================================
+\documentclass[12pt,a4paper]{article}
+
+% --- Lề trang ----------------------------------------------------------------
+\usepackage[margin=2.5cm]{geometry}
+\setlength{\parskip}{0.4em}
+
+% --- Phông chữ Unicode (XeLaTeX): Latin Modern hỗ trợ dấu tiếng Việt ----------
+\usepackage{fontspec}
+\setmainfont{lmroman10}[
+  Extension      = .otf,
+  UprightFont    = *-regular,
+  BoldFont       = *-bold,
+  ItalicFont     = *-italic,
+  BoldItalicFont = *-bolditalic,
+]
+
+% --- Gói cốt lõi -------------------------------------------------------------
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{enumitem}
+
+% --- Nhãn tiếng Việt ---------------------------------------------------------
+\renewcommand{\abstractname}{Tóm tắt}
+\renewcommand{\figurename}{Hình}
+\renewcommand{\tablename}{Bảng}
+\renewcommand{\refname}{Tài liệu tham khảo}
+\renewcommand{\contentsname}{Mục lục}
+\renewcommand{\appendixname}{Phụ lục}
+\renewcommand{\listfigurename}{Danh mục hình vẽ}
+\renewcommand{\listtablename}{Danh mục bảng}
+
+% --- Kiểu trình bày mã lệnh --------------------------------------------------
+\definecolor{codebg}{rgb}{0.96,0.96,0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{codebg},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\begin{document}
+
+%==============================================================================
+% TRANG BÌA
+%==============================================================================
+\begin{titlepage}
+\centering
+{\large\bfseries HỌC VIỆN KỸ THUẬT MẬT MÃ}\\[2pt]
+{\large\bfseries KHOA AN TOÀN THÔNG TIN}\\[6pt]
+\rule{\textwidth}{0.8pt}\\[2.2cm]
+
+{\Large\bfseries BÁO CÁO CHUYÊN ĐỀ}\\[6pt]
+{\large An toàn Thông tin}\\[2.4cm]
+
+{\large\itshape Đề tài}\\[10pt]
+{\LARGE\bfseries Nghiên cứu cơ chế phát hiện tấn công leo thang\\[4pt]
+đặc quyền trong môi trường Multi-tenant Kubernetes\\[4pt]
+dựa trên phân tích System Calls}\\[2.6cm]
+
+\begin{tabular}{rl}
+  \textbf{Giảng viên hướng dẫn} & : TS. Nguyễn Văn Dũng\\[5pt]
+  \textbf{Học viên thực hiện}   & : Nguyễn Ngọc Hoài --- CHAT4P006\\[5pt]
+  \textbf{Lớp}                  & : CHAT4P\\
+\end{tabular}
+
+\vfill
+{\large Hà Nội, tháng 6 năm 2026}
+\end{titlepage}
+
+%==============================================================================
+% PHẦN ĐẦU: Tóm tắt, Mục lục, Danh mục
+%==============================================================================
+\pagenumbering{roman}
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\noindent\textbf{Từ khóa:} leo thang đặc quyền, multi-tenant Kubernetes, bảo mật
+container, lời gọi hệ thống, eBPF, Tetragon, phát hiện bất thường, Bộ mã hóa biến
+phân tự động (VAE), Rừng cô lập, DongTing, DeSFAM.
+
+\clearpage
+\tableofcontents
+\clearpage
+\listoffigures
+\listoftables
+\clearpage
+
+\pagenumbering{arabic}
+
+\input{sections/01-introduction}
+\input{sections/02-related-work}
+\input{sections/03-methodology}
+\input{sections/04-experiment-setup}
+\input{sections/05-evaluation}
+\input{sections/06-discussion}
+\input{sections/07-conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\appendix
+\input{sections/08-appendix-repro}
+
+\end{document}

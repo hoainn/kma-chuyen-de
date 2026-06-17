@@ -11,7 +11,21 @@ services:
       ARTIFACTS_DIR:      /artifacts
       TARGET_NAMESPACE:   ${TARGET_NAMESPACE:-demo}
       KERNEL_VER:         ${KERNEL_VER:-6.17}
-      THRESHOLD:          ${THRESHOLD:-0.08}
+      # Threshold: 0 means "use the trained T_0 from results.json". The model
+      # writes the threshold the training-side strategy picked (paper §IV.B.3:
+      # T_0 = p99.5 of benign-val recon error when THRESHOLD_STRATEGY=p995, else
+      # F1-optimal on the val sweep). Override only for ad-hoc tuning.
+      THRESHOLD:          ${THRESHOLD:-0}
+      # Online EMA threshold (paper §IV.B.3 Eq. 3): set EMA_ENABLED=1 to start
+      # adapting T at runtime — T moves toward recent non-flagged scores so the
+      # detector tracks normal-behaviour drift. Defaults match the paper, but
+      # EMA_TMIN=0.5 was calibrated to a VAE-recon score scale; for our
+      # RobustScaled ensemble you may want EMA_TMIN ≈ trained T_0 (see
+      # results.json -> models.ensemble.threshold). The evolving T is exported
+      # as `desfam_threshold` and visualised by the EMA Grafana panel.
+      EMA_ENABLED:        ${EMA_ENABLED:-0}
+      EMA_BETA:           ${EMA_BETA:-0.9}
+      EMA_TMIN:           ${EMA_TMIN:-0.5}
       WINDOW_LEN:         ${WINDOW_LEN:-15}
       WINDOW_STRIDE:      ${WINDOW_STRIDE:-3}
       MAX_IDLE_SECS:      ${MAX_IDLE_SECS:-30}

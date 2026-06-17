@@ -23,11 +23,23 @@ def _find(d: str, *names: str) -> str | None:
     return None
 
 
+def _build_patterns_by_first(patterns: list) -> dict[int, list]:
+    """Index benign patterns by first syscall ID — mirrors
+    train.py::build_patterns_by_first (same sort) for byte-identical matching."""
+    from collections import defaultdict
+    by_first: dict[int, list] = defaultdict(list)
+    for p in patterns:
+        if p:
+            by_first[int(p[0])].append(tuple(int(x) for x in p))
+    return {k: sorted(v) for k, v in by_first.items()}
+
+
 def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
     """Load all model artifacts from the given directory.
 
     Returns a dict with keys:
-        top_ids, disc_ids, top_bigrams, ver_cols, input_dim,
+        cat_cols, id_to_cat, patterns_by_first, ps_dims,
+        has_temporal, temporal_dims, input_dim,
         feature_scaler, iforest, encoder, decoder,
         ensemble, legacy_norm, threshold
     """
@@ -36,57 +48,50 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
 
     d = artifacts_dir
 
-    # ── Feature vocabulary ────────────────────────────────────────────────────
+    # ── Paper-only feature config (fe_report.json) ─────────────────────────────
     fe_report_path = _find(d, "fe_report.json")
-    fc_path = _find(d, "feature_config.json")
+    if not fe_report_path:
+        raise FileNotFoundError(f"No fe_report.json found in {d}.")
+    with open(fe_report_path) as f:
+        fe = json.load(f)
+    # `feature_mode` is no longer required (paper-plus is the only supported
+    # configuration). Older artefacts still carry the field — accept either
+    # absent or any string value here for backward compatibility.
+    mode = fe.get("feature_mode", "paper_plus")
 
-    if fe_report_path:
-        log.info("Feature mode: legacy DongTing (fe_report.json)")
-        with open(fe_report_path) as f:
-            fe = json.load(f)
-        top_ids  = list(fe["top_ids"])
-        disc_ids = list(fe["disc_ids"])
-        # support both old key (top_bigrams) and new key (top_ngrams)
-        raw_ng   = fe.get("top_ngrams") or fe.get("top_bigrams", [])
-        top_ngrams = [tuple(g) for g in raw_ng]
-        ngram_n  = int(fe.get("ngram_n", 2))
-        ver_cols = fe.get("ver_cols", [])
-        cat_cols = fe.get("cat_cols", [])
-        # syscall_id_to_cat is serialised with stringified int keys (JSON limit).
-        raw_id2cat = fe.get("syscall_id_to_cat", {}) or {}
-        id_to_cat: dict[int, str] = {int(k): v for k, v in raw_id2cat.items()}
-        input_dim = (len(top_ids) + len(disc_ids) + 8 + len(top_ngrams)
-                     + len(ver_cols) + len(cat_cols))
-    elif fc_path:
-        raw_fc = json.loads(open(fc_path).read())
-        if "top_syscalls" in raw_fc and raw_fc["top_syscalls"]:
-            log.info("Feature mode: FeatureConfig (feature_config.json)")
-            top_ids  = raw_fc["top_syscalls"]
-            disc_ids = raw_fc.get("disc_syscalls", [])
-            raw_ng   = raw_fc.get("top_ngrams") or raw_fc.get("top_bigrams", [])
-            top_ngrams = [tuple(g) for g in raw_ng]
-            ngram_n  = int(raw_fc.get("ngram_n", 2))
-            ver_cols = raw_fc.get("kernel_versions", [])
-            cat_cols = raw_fc.get("cat_cols", [])
-            raw_id2cat = raw_fc.get("syscall_id_to_cat", {}) or {}
-            id_to_cat = {int(k): v for k, v in raw_id2cat.items()}
-            input_dim = (len(top_ids) + len(disc_ids) + 8 + len(top_ngrams)
-                         + len(ver_cols) + len(cat_cols))
-        else:
-            raise RuntimeError(
-                f"feature_config.json at {fc_path} has no top_syscalls. "
-                "Use an artifacts dir with fe_report.json (DongTing) or a full FeatureConfig."
-            )
-    else:
-        raise FileNotFoundError(
-            f"No feature vocabulary found in {d}. "
-            "Expected fe_report.json (DongTing) or feature_config.json (ADFA-LD)."
-        )
+    cat_cols = fe.get("cat_cols", [])
+    raw_id2cat = fe.get("syscall_id_to_cat", {}) or {}
+    id_to_cat: dict[int, str] = {int(k): v for k, v in raw_id2cat.items()}
+    has_temporal  = bool(fe.get("has_temporal", False))
+    temporal_dims = int(fe.get("temporal_dims", 0))
+    ps_dims       = int(fe.get("prefixspan_dims", 0))
+    # Sensor alphabet — the syscall IDs training was restricted to. We re-filter
+    # live windows to it so a TracingPolicy that drifts wider than training can't
+    # skew cat_K (which maps ANY id via id_to_cat). Empty/absent → no filter.
+    sensor_alphabet = {int(x) for x in fe.get("sensor_alphabet", [])} or None
+    # paper_plus engineered vocab (empty under paper_only)
+    top_ids      = [int(x) for x in fe.get("top_ids", [])]
+    disc_ids     = [int(x) for x in fe.get("disc_ids", [])]
+    top_bigrams  = [tuple(g) for g in fe.get("top_bigrams", [])]
+    enable_stats = bool(fe.get("enable_stats", False))
+
+    # Benign pattern DB (PrefixSpan)
+    patterns_by_first: dict[int, list] = {}
+    bp_name = fe.get("benign_patterns_file", "benign_patterns.json")
+    bp_path = _find(d, bp_name, "benign_patterns.json")
+    if ps_dims and bp_path:
+        with open(bp_path) as f:
+            patterns_by_first = _build_patterns_by_first(json.load(f).get("patterns", []))
+
+    n_stats = 8 if enable_stats else 0
+    input_dim = int(fe.get("total_dims",
+                           len(top_ids) + len(disc_ids) + n_stats + len(top_bigrams)
+                           + len(cat_cols) + temporal_dims + ps_dims))
 
     log.info(
-        f"  vocab: freq={len(top_ids)} disc={len(disc_ids)} "
-        f"{ngram_n}-grams={len(top_ngrams)} ver_bins={len(ver_cols)} "
-        f"cat={len(cat_cols)} → input_dim={input_dim}"
+        f"  {mode}: freq={len(top_ids)} disc={len(disc_ids)} stats={n_stats} "
+        f"bigrams={len(top_bigrams)} cat={len(cat_cols)} "
+        f"temporal={temporal_dims} prefixspan={ps_dims}  → input_dim={input_dim}"
     )
 
     # ── Feature scaler ────────────────────────────────────────────────────────
@@ -103,6 +108,12 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
     if if_path is None:
         raise FileNotFoundError(f"Isolation Forest not found in {d}")
     iforest = joblib.load(if_path)
+    # Silence joblib.Parallel logging: models trained with verbose=1 re-emit a
+    # progress block on every decision_function call, flooding the detector log.
+    try:
+        iforest.verbose = 0
+    except Exception:
+        pass
     log.info(f"IF loaded: {os.path.basename(if_path)}")
 
     # ── VAE ───────────────────────────────────────────────────────────────────
@@ -149,10 +160,21 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
     # ── Decision threshold ────────────────────────────────────────────────────
     results_path = _find(d, "results.json", "model_report_fe.json")
     threshold: float
+    # Per-component T_0 (paper §IV.B.3 initial threshold) — for the Grafana
+    # "Component Thresholds" panel and the eventual EMA loop in detect.py.
+    component_thresholds: dict[str, float] = {}
+    experiment: str = ""
     if results_path:
         res = json.loads(open(results_path).read())
+        experiment = str(res.get("experiment", ""))
         if "models" in res and "ensemble" in res["models"]:
             threshold = float(res["models"]["ensemble"]["threshold"])
+            # results.json keys are 'isolation_forest' / 'vae' / 'ensemble'; we
+            # normalise the IF label to 'iforest' for the dashboard.
+            _label_map = {"vae": "vae", "isolation_forest": "iforest", "ensemble": "ensemble"}
+            for k, dst in _label_map.items():
+                if k in res["models"]:
+                    component_thresholds[dst] = float(res["models"][k]["threshold"])
         else:
             threshold = float(res.get("threshold", 0.5))
         log.info(f"Threshold loaded from results.json: {threshold:.4f}")
@@ -178,19 +200,26 @@ def load(artifacts_dir: str, log: logging.Logger | None = None) -> dict:
         log.info(f"Legacy normalizer: alpha={legacy_norm['alpha']}")
 
     return {
-        "top_ids":       top_ids,
-        "disc_ids":      disc_ids,
-        "top_ngrams":    top_ngrams,
-        "ngram_n":       ngram_n,
-        "ver_cols":      ver_cols,
-        "cat_cols":      cat_cols,
-        "id_to_cat":     id_to_cat,
-        "input_dim":     input_dim,
-        "feature_scaler": feature_scaler,
-        "iforest":       iforest,
-        "encoder":       encoder,
-        "decoder":       decoder,
-        "ensemble":      ensemble,
-        "legacy_norm":   legacy_norm,
-        "threshold":     threshold,
+        "feature_mode":      mode,
+        "sensor_alphabet":   sensor_alphabet,
+        "cat_cols":          cat_cols,
+        "id_to_cat":         id_to_cat,
+        "patterns_by_first": patterns_by_first,
+        "ps_dims":           ps_dims,
+        "has_temporal":      has_temporal,
+        "temporal_dims":     temporal_dims,
+        "top_ids":           top_ids,
+        "disc_ids":          disc_ids,
+        "top_bigrams":       top_bigrams,
+        "enable_stats":      enable_stats,
+        "input_dim":         input_dim,
+        "feature_scaler":    feature_scaler,
+        "iforest":           iforest,
+        "encoder":           encoder,
+        "decoder":           decoder,
+        "ensemble":          ensemble,
+        "legacy_norm":       legacy_norm,
+        "threshold":         threshold,
+        "component_thresholds": component_thresholds,
+        "experiment":        experiment,
     }

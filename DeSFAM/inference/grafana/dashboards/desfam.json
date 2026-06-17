@@ -161,7 +161,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Total Confirmed Attacks",
+      "title": "Confirmed Attacks (this view)",
       "gridPos": {
         "y": 2,
         "x": 0,
@@ -174,7 +174,7 @@
       },
       "targets": [
         {
-          "expr": "sum(desfam_attacks_total{pod=~\"$pod\"}) or vector(0)",
+          "expr": "round(sum(increase(desfam_attacks_total{pod=~\"$pod\"}[$__range])) or vector(0))",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -215,7 +215,7 @@
         },
         "overrides": []
       },
-      "description": "Cumulative count of confirmed attack traces since the detector started (or since the counter was reset). Compare against \"Pods Under Attack\" for current state: a high total with zero currently under attack means attacks happened earlier but the pod is now quiet."
+      "description": "Count of attack flags within the currently selected dashboard time range. Cumulative `desfam_attacks_total` includes flags from earlier runs with stale thresholds, so the range-windowed count is more useful."
     },
     {
       "id": 17,
@@ -1199,27 +1199,299 @@
       "description": "Syscall-level evidence for confirmed attacks. Shows what the model actually saw inside the anomalous process trace."
     },
     {
-      "id": 21,
-      "type": "table",
-      "title": "Last Attack \u2014 Full Triage Detail",
-      "description": "One row per pod. Shows severity, anomaly score, top syscalls, deduplicated sequence prefix, files opened (openat), and binaries executed (execve). Empty paths/execs = pure network I/O attack (likely FP for web services).",
+      "type": "row",
+      "title": "Loaded model",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 24,
+        "h": 1
+      },
+      "id": 201,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Active threshold T over time (ensemble-score space)",
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 24,
+        "h": 9
+      },
+      "id": 209,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_threshold",
+          "legendFormat": "T (active, ensemble space)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_component_threshold{model=\"ensemble\"}",
+          "legendFormat": "T\u2080 ensemble (trained, p995)"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "0.5",
+          "legendFormat": "T_min floor (EMA_TMIN)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "T (active, ensemble space)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "T\u2080 ensemble (trained, p995)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    5,
+                    5
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "T_min floor (EMA_TMIN)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    2,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "super-light-blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "description": "Solid red = current T used to decide flag vs no-flag (ensemble anomaly score). Dashed green = the model's trained T\u2080=p995. Dashed grey = EMA_TMIN floor. T moves between these only on non-flagged windows (paper \u00a7IV.B.3 Algorithm 2 line 16). The per-model VAE / IF thresholds live in different score spaces and are shown separately in the panels above."
+    },
+    {
+      "type": "table",
+      "title": "Loaded model \u2014 runtime metadata",
       "gridPos": {
-        "h": 14,
-        "w": 24,
         "x": 0,
-        "y": 53
+        "y": 68,
+        "w": 24,
+        "h": 4
+      },
+      "id": 210,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
-          "expr": "desfam_last_attack_detail",
-          "legendFormat": "{{pod}}",
           "refId": "A",
-          "instant": true,
-          "format": "table"
+          "expr": "desfam_model_info",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "indexByName": {
+              "feature_mode": 0,
+              "total_dims": 1,
+              "n_benign_patterns": 2,
+              "prefixspan_dims": 3,
+              "has_temporal": 4,
+              "experiment": 5
+            },
+            "renameByName": {
+              "feature_mode": "Feature mode",
+              "total_dims": "Vector dim",
+              "n_benign_patterns": "Benign patterns",
+              "prefixspan_dims": "PrefixSpan dims",
+              "has_temporal": "Temporal \u0394t",
+              "experiment": "Experiment"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "False": {
+                  "text": "OFF (no timestamps)",
+                  "color": "orange"
+                },
+                "True": {
+                  "text": "ON",
+                  "color": "green"
+                },
+                "paper_plus": {
+                  "text": "paper_plus  (engineered support groups)",
+                  "color": "blue"
+                },
+                "paper_only": {
+                  "text": "paper_only  (literal \u00a7IV.B.3)",
+                  "color": "orange"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Feature mode"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Temporal \u0394t"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "table",
+      "id": 211,
+      "title": "Last Attack \u2014 Triage summary (pod / severity / syscall trace)",
+      "description": "Per-pod summary of the most recent confirmed attack: severity bucket, top syscalls, the first 12 deduped calls of the offending window, file paths and binaries it touched. Pairs with the feature-vector table below \u2014 *what* the model saw vs *where* the alert came from.",
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "last_over_time(desfam_last_attack_detail[24h])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -1230,80 +1502,69 @@
           }
         },
         {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "pod",
-                "severity",
-                "Value",
-                "top_syscalls",
-                "seq_prefix",
-                "seq_len",
-                "paths",
-                "execs"
-              ]
-            }
-          }
-        },
-        {
           "id": "organize",
           "options": {
-            "renameByName": {
-              "pod": "Pod",
-              "severity": "Severity",
-              "Value": "Score",
-              "top_syscalls": "Top Syscalls",
-              "seq_prefix": "Syscall Sequence (prefix)",
-              "seq_len": "Seq Len",
-              "paths": "Files Accessed",
-              "execs": "Binaries Executed"
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "Value": true
             },
             "indexByName": {
               "pod": 0,
               "severity": 1,
-              "Value": 2,
+              "seq_len": 2,
               "top_syscalls": 3,
               "seq_prefix": 4,
-              "seq_len": 5,
-              "paths": 6,
-              "execs": 7
+              "paths": 5,
+              "execs": 6
+            },
+            "renameByName": {
+              "pod": "Pod",
+              "severity": "Severity",
+              "seq_len": "Window size",
+              "top_syscalls": "Top syscalls",
+              "seq_prefix": "Syscall trace (first 12, deduped)",
+              "paths": "File paths touched",
+              "execs": "Binaries executed"
             }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": [
-              {
-                "desc": true,
-                "displayName": "Score"
-              }
-            ]
           }
         }
       ],
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "left",
-            "displayMode": "auto",
-            "filterable": false
-          }
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "CRIT": {
+                  "text": "CRIT",
+                  "color": "red"
+                },
+                "HIGH": {
+                  "text": "HIGH",
+                  "color": "orange"
+                },
+                "MED": {
+                  "text": "MED",
+                  "color": "yellow"
+                },
+                "LOW": {
+                  "text": "LOW",
+                  "color": "blue"
+                }
+              }
+            }
+          ]
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Pod"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 300
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
@@ -1311,45 +1572,117 @@
             },
             "properties": [
               {
-                "id": "custom.width",
-                "value": 65
-              },
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "CRIT": {
-                        "text": "CRIT",
-                        "color": "#e02f44",
-                        "index": 0
-                      },
-                      "HIGH": {
-                        "text": "HIGH",
-                        "color": "#ff780a",
-                        "index": 1
-                      },
-                      "MED": {
-                        "text": "MED",
-                        "color": "#fade2a",
-                        "index": 2
-                      },
-                      "LOW": {
-                        "text": "LOW",
-                        "color": "#37872d",
-                        "index": 3
-                      }
-                    }
-                  }
-                ]
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
               }
             ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "table",
+      "id": 212,
+      "title": "Attack history \u2014 last 20 windows the model flagged (newest first, 15m)",
+      "description": "Each row = one attack-flagged window the model evaluated. Columns 2\u20137 = the six paper_plus feature groups; each cell holds the dim=value list (only dims with |scaled| \u2265 0.5, sorted by deviation, capped at 8 per group + '(+N more)'). Score column = ensemble anomaly score for that window. Rolling buffer of 20 attacks per pod; old ones are evicted when newer attacks land.",
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 24,
+        "h": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "last_over_time(desfam_attack_history[15m])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
           },
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "bigrams": true
+            },
+            "indexByName": {
+              "attack_id": 0,
+              "pod": 1,
+              "freq": 2,
+              "disc": 3,
+              "stats": 4,
+              "cat": 5,
+              "prefixspan": 6,
+              "Value": 7
+            },
+            "renameByName": {
+              "attack_id": "Time",
+              "pod": "Pod",
+              "freq": "freq \u00b7 top-K syscall freq",
+              "disc": "disc \u00b7 discriminative syscalls",
+              "stats": "stats \u00b7 window shape",
+              "cat": "cat \u00b7 functional categories",
+              "prefixspan": "prefixspan \u00b7 pattern match",
+              "Value": "Score"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Time",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "limit",
+          "options": {
+            "limitField": 20
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "\u2014",
+          "decimals": 4
+        },
+        "overrides": [
           {
             "matcher": {
               "id": "byName",
@@ -1357,16 +1690,11 @@
             },
             "properties": [
               {
-                "id": "custom.width",
-                "value": 65
-              },
-              {
-                "id": "decimals",
-                "value": 3
-              },
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
               },
               {
                 "id": "thresholds",
@@ -1379,71 +1707,75 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 0.05
+                      "value": 0.5
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1.0
                     },
                     {
                       "color": "red",
-                      "value": 0.05
+                      "value": 2.0
                     }
                   ]
                 }
               },
               {
-                "id": "custom.thresholdsStyle",
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pod"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "freq \u00b7 top-K syscall freq"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
                 "value": {
-                  "mode": "background"
+                  "type": "color-background",
+                  "mode": "basic"
                 }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Top Syscalls"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 250
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Syscall Sequence (prefix)"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 320
               },
               {
-                "id": "custom.wrap",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Seq Len"
-            },
-            "properties": [
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
               {
                 "id": "custom.width",
-                "value": 65
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Files Accessed"
-            },
-            "properties": [
+                "value": 200
+              },
               {
-                "id": "custom.wrap",
+                "id": "custom.cellOptions.wrapText",
                 "value": true
               }
             ]
@@ -1451,11 +1783,149 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Binaries Executed"
+              "options": "disc \u00b7 discriminative syscalls"
             },
             "properties": [
               {
-                "id": "custom.wrap",
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "custom.cellOptions.wrapText",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stats \u00b7 window shape"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "custom.cellOptions.wrapText",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bigrams \u00b7 transitions"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "custom.cellOptions.wrapText",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cat \u00b7 functional categories"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "custom.cellOptions.wrapText",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prefixspan \u00b7 pattern match"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              },
+              {
+                "id": "custom.cellOptions.wrapText",
                 "value": true
               }
             ]
@@ -1463,14 +1933,708 @@
         ]
       },
       "options": {
-        "footer": {
-          "show": false
-        },
-        "frameIndex": 0
+        "showHeader": true,
+        "cellHeight": "md"
       }
+    },
+    {
+      "type": "stat",
+      "id": 213,
+      "title": "VAE T\u2080 \u2014 anomaly recon error scale",
+      "description": "VAE reconstruction-error space (NOT comparable to IF/ensemble).",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_component_threshold{model=\"vae\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "decimals": 4
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 214,
+      "title": "IF T\u2080 \u2014 isolation-depth score scale",
+      "description": "Isolation-Forest score space (NOT comparable to VAE/ensemble).",
+      "gridPos": {
+        "x": 8,
+        "y": 72,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_component_threshold{model=\"iforest\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "decimals": 4
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 215,
+      "title": "Ensemble T\u2080 \u2014 final-decision scale (this drives the flag)",
+      "description": "Post-fusion ensemble score \u2014 what is actually compared to `desfam_threshold` at runtime.",
+      "gridPos": {
+        "x": 16,
+        "y": 72,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_component_threshold{model=\"ensemble\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "decimals": 4
+        }
+      }
+    },
+    {
+      "type": "text",
+      "id": 216,
+      "title": "EMA calculator \u2014 how T is computed (paper \u00a7IV.B.3 Eq. 3)",
+      "gridPos": {
+        "x": 0,
+        "y": 87,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## The equation\n\n```\nT_{t+1}   =   max(   T_min   ,   \u03b2 \u00b7 T_t   +   (1 \u2212 \u03b2) \u00b7 A(W_i)   )\n```\n\nApplied **only on non-flagged windows** (where A \u2264 T_t). Attack scores skip the update, so T cannot drift upward and silence subsequent detections \u2014 paper \u00a7IV.B.3 Algorithm 2 line 16.\n\n### Read the eight cards below left-to-right\n1\u20134 = the **inputs** (live: T_t, \u03b2, A(W_i), T_min) \u00b7 5\u20137 = the **intermediate products** \u00b7 8 = the **result** that became `desfam_threshold`."
+      }
+    },
+    {
+      "type": "stat",
+      "id": 217,
+      "title": "1.  T_t",
+      "gridPos": {
+        "x": 0,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_t_prev",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "super-light-blue"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 218,
+      "title": "2.  \u03b2",
+      "gridPos": {
+        "x": 3,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_beta",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "super-light-blue"
+          },
+          "decimals": 2,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 219,
+      "title": "3.  A(W_i)",
+      "gridPos": {
+        "x": 6,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_last_score",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "super-light-blue"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 220,
+      "title": "4.  T_min",
+      "gridPos": {
+        "x": 9,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_t_min",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "super-light-blue"
+          },
+          "decimals": 2,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 221,
+      "title": "5.  \u03b2 \u00b7 T_t",
+      "gridPos": {
+        "x": 12,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_beta * desfam_ema_t_prev",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 222,
+      "title": "6.  (1\u2212\u03b2) \u00b7 A",
+      "gridPos": {
+        "x": 15,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(1 - desfam_ema_beta) * desfam_ema_last_score",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 223,
+      "title": "7.  sum",
+      "gridPos": {
+        "x": 18,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_ema_beta * desfam_ema_t_prev + (1 - desfam_ema_beta) * desfam_ema_last_score",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 224,
+      "title": "8.  T_{t+1} = max(T_min, sum)",
+      "gridPos": {
+        "x": 21,
+        "y": 92,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "desfam_threshold",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "decimals": 4,
+          "noValue": "\u2014"
+        }
+      }
+    },
+    {
+      "id": 225,
+      "type": "row",
+      "title": "Tetragon Logs (Loki)",
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 97
+      },
+      "panels": []
+    },
+    {
+      "id": 226,
+      "type": "logs",
+      "title": "Tetragon syscall events \u2014 ns demo",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Live Tetragon syscall-event stream (export-stdout) filtered to ns demo pods. Source: Loki, scraped by Promtail from the Tetragon node log.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 98
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "exact",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{namespace=\"kube-system\", container=\"export-stdout\"} |= \"\\\"namespace\\\":\\\"demo\\\"\"",
+          "queryType": "range",
+          "maxLines": 100
+        }
+      ]
+    },
+    {
+      "id": 227,
+      "type": "logs",
+      "title": "Tetragon syscall events \u2014 all (raw)",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Full Tetragon export-stdout event stream (all namespaces the policy traces).",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 110
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "exact",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{namespace=\"kube-system\", container=\"export-stdout\"}",
+          "queryType": "range",
+          "maxLines": 100
+        }
+      ]
+    },
+    {
+      "id": 228,
+      "type": "logs",
+      "title": "ns demo \u2014 workload logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Application stdout/stderr of the demo workloads (per-pod label `pod`).",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 122
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "exact",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{namespace=\"demo\"}",
+          "queryType": "range",
+          "maxLines": 100
+        }
+      ]
     }
   ],
-  "refresh": "10s",
+  "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
     "security",
@@ -1514,5 +2678,5 @@
   "timezone": "browser",
   "title": "DeSFAM \u2014 Runtime Syscall Anomaly Detection",
   "uid": "desfam-v1",
-  "version": 1
+  "version": 6
 }

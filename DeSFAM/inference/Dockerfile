@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/           src/
 COPY tetragon_grpc/ tetragon_grpc/
 COPY syscalls_x86_64.py .
+# Kernel syscall table — same one training used. Lets detect.py resolve every
+# id (including the x32 ABI range 512–547) to its canonical name.
+COPY syscall_64.tbl .
 COPY detect.py .
 
 ENV PYTHONPATH=/app

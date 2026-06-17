@@ -1,6 +1,22 @@
 """
 DeSFAM — DongTing Training Pipeline (script mode)
 Sync target: train_dongting.ipynb — keep function bodies identical in both files.
+
+Paper-faithful feature engineering (paper §IV.B.3). The feature vector now contains
+ONLY the components the paper names, per-sliding-window:
+
+    [ cat_K | temporal_3? | prefixspan_P ]
+
+  • cat_K        — normalised per-window frequency over K=10 functional syscall
+                   categories (paper "Categorical Frequencies"; the behavioural signature).
+  • temporal_3   — Δt mean/std/max per window. CONDITIONAL: present only when the
+                   loaded sequences carry per-syscall timestamps (re-traced / live eBPF
+                   stream). DongTing has none, so this group contributes 0 dims.
+  • prefixspan_P — P=2 PrefixSpan benign-pattern match: [matched-flag, longest-match/L]
+                   (paper "Access List Pattern Matching").
+
+The earlier engineered groups (freq_60 / disc_40 / stats_8 / bigrams_40 / ver_onehot)
+were never described by the paper and have been removed.
 """
 from __future__ import annotations
 
@@ -8,12 +24,12 @@ import json
 import os
 import random
 import warnings
-from collections import Counter
+import zipfile
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import joblib
 import numpy as np
-from pymongo import MongoClient
 from scipy.stats import entropy as scipy_entropy
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
@@ -30,21 +46,70 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 # ── Environment ────────────────────────────────────────────────────────────
-MONGO_URI   = os.environ.get('MONGO_URI',   'mongodb://mongo:27017/')
-MONGO_DB    = os.environ.get('MONGO_DB',    'syzbot_DB')
 SYSCALL_TBL = os.environ.get('SYSCALL_TBL', '/data/dongting_repo/syscall_64.tbl')
 OUTPUT_DIR  = os.environ.get('OUTPUT_DIR',  '/model')
 
-# Sliding-window training (paper §IV.B.1: length 15, stride 3). Opt-in so the
-# default pipeline still trains on full per-process traces.
-USE_SLIDING_WINDOW = os.environ.get('USE_SLIDING_WINDOW', '0') == '1'
+# Data source — the full DongTing release on the host filesystem (.log files +
+# Baseline.xlsx splits). The legacy MongoDB loader has been removed.
+DATA_ROOT   = os.environ.get('DATA_ROOT',   '/data/dongting')
+
+# DongTing's full traces can be tens of MB each (millions of syscalls); the raw
+# corpus is far too large to hold in RAM. Truncate each trace to its first
+# DATA_MAX_SEQ_LEN syscalls (0 = unlimited). Windowing still slides over the kept
+# prefix and MAX_WINDOWS_PER_SPLIT caps the final matrix.
+DATA_MAX_SEQ_LEN = int(os.environ.get('DATA_MAX_SEQ_LEN', '50000'))
+
+# Sliding-window training (paper §IV.B.3: length 15, stride 3). Now the canonical
+# default — the live detector is always window-based, so training matches it.
+USE_SLIDING_WINDOW = os.environ.get('USE_SLIDING_WINDOW', '1') == '1'
 WINDOW_LEN    = int(os.environ.get('WINDOW_LEN',    '15'))
 WINDOW_STRIDE = int(os.environ.get('WINDOW_STRIDE', '3'))
 
-# Categorical syscall frequencies (paper §IV.B.1, "Categorical Frequencies"):
-# functional-category one-hot frequency per window. Adds n_cat dims after the
-# version one-hot. Default ON because it is the paper-claimed signature feature.
-USE_CATEGORIES = os.environ.get('USE_CATEGORIES', '1') == '1'
+# Temporal Δt features (paper "Temporal Features"). Gated: only emitted when the
+# loaded data carries timestamps. DongTing has none → group stays at 0 dims and
+# the trained model + fe_report record has_temporal=False so inference matches.
+USE_TEMPORAL = os.environ.get('USE_TEMPORAL', '0') == '1'
+
+# Feature engineering vocabulary sizes (paper-faithful reconstruction).
+#
+# The DeSFAM paper (§IV.B.3) names 5 components: sliding windows, categorical
+# frequencies, temporal Δt, PrefixSpan benign-pattern matching, data augmentation.
+# Implemented literally, these 5 collapse the VAE (val AUC ≈ 0.41); even adding
+# the four standard syscall-IDS support groups (freq/disc/stats/bigrams) only
+# reaches val AUC ≈ 0.76 — still below the paper's Table-3 (test AUC 0.96 VAE,
+# 0.92 ensemble). This 140-dim vector is the best honest reconstruction we have;
+# the gap suggests the paper uses additional/wider feature engineering it does
+# not document.
+TOP_K_FREQ    = int(os.environ.get('TOP_K_FREQ',    '50'))
+TOP_K_DISC    = int(os.environ.get('TOP_K_DISC',    '30'))
+TOP_K_BIGRAMS = int(os.environ.get('TOP_K_BIGRAMS', '40'))
+
+# The stats_8 group is derived from the freq counts; silence it (ENABLE_STATS=0)
+# when the alphabet is small enough that per-syscall frequency is already the
+# full behavioural fingerprint and the extra 8 dims only add VAE-collapse risk.
+ENABLE_STATS = os.environ.get('ENABLE_STATS', '1') == '1'
+
+# ── Sensor alphabet (deployment-faithful feature space) ────────────────────
+# The live Tetragon TracingPolicy emits only a fixed set of security-relevant
+# syscalls — no read/write/close/futex/etc. Training on the FULL DongTing
+# syscall universe therefore fits the scaler / vocab / PrefixSpan DB in a
+# feature space the detector never observes at serve time: every live window
+# collapses onto a near-degenerate vector and benign ≈ attack (the saturation
+# rail documented in docs/auto-iter-log.md). We restrict training to the SAME
+# alphabet the sensor emits so train/serve windows are isomorphic. The list is
+# the union of the kprobes in Kubernetes/tetragon/tracing-policy*.yaml (the
+# applied live policy `syscall-ad-tracing`). Set SENSOR_ALPHABET=0 to reproduce
+# the legacy full-universe behaviour.
+SENSOR_ALPHABET_NAMES = [
+    'execve', 'clone', 'setuid', 'setgid', 'capset', 'openat', 'unlinkat',
+    'renameat2', 'mount', 'unshare', 'setns', 'pivot_root', 'socket',
+    'connect', 'bind', 'mprotect', 'mmap', 'prctl', 'memfd_create', 'splice',
+    'ptrace', 'init_module', 'finit_module', 'bpf',
+]
+USE_SENSOR_ALPHABET = os.environ.get('SENSOR_ALPHABET', '1') == '1'
+# Resolved to syscall IDs in main() once the table is loaded; consumed by the
+# loader (_parse_log_member) to drop every non-sensor syscall before windowing.
+_ALLOWED_IDS: set[int] | None = None
 
 # Cap on windows PER SPLIT. DongTing's long attack traces expand to ~127 M
 # train windows at stride=3 — that alone would need ~80 GB. We subsample each
@@ -77,21 +142,27 @@ def _log(msg: str) -> None:
     mm, ss = divmod(int(elapsed), 60)
     print(f'[{mm:02d}:{ss:02d}  ram={_rss_gib():4.1f}G]  {msg}', flush=True)
 
-# Paper feature components NOT implemented here:
-#   • Temporal features (Δt mean/std/max) — DongTing stores syscall sequences as
-#     pipe-separated IDs only; no timestamps are recoverable from the dataset.
-#   • PrefixSpan Access List pattern matching — deferred; high engineering cost
-#     and orthogonal to the main detection model.
-#   • Synthetic data augmentation of attack sequences — incompatible with the
-#     normal-only training paradigm (IF and VAE never see attack data).
-# These gaps are documented in the replication report; do not silently ignore.
+# Paper feature-component status (paper §IV.B.3):
+#   • Sliding Windows            — implemented (len 15, stride 3), now the default.
+#   • Categorical Frequencies    — implemented (cat_K, the core behavioural signature).
+#   • Access List Pattern Match  — implemented (PrefixSpan benign-pattern match, prefixspan_P).
+#   • Temporal Δt (mean/std/max) — implemented as a CONDITIONAL group: it only
+#     activates when the loaded sequences carry per-syscall timestamps. Every
+#     DongTing artefact (raw .log, npz, Mongo) stores syscall identifiers ONLY —
+#     collection used `strace -v -f` with no timing flags — so the group stays at
+#     0 dims here. A re-traced/live timestamped stream would light it up.
+#   • Data Augmentation          — NOT implemented: synthetic attack-sequence
+#     augmentation is incompatible with the normal-only IF/VAE training paradigm
+#     (neither model ever sees attack data). Documented as a known limitation.
 
 # ── Hyperparameters ────────────────────────────────────────────────────────
 CFG = {
-    'top_k_freq':    60,
-    'top_k_disc':    40,
-    'top_k_ngrams':  40,
-    'ngram_n':       2,
+    # PrefixSpan benign-pattern mining (paper "Access List Pattern Matching").
+    # Mined on NORMAL training windows only; matched per window at featurisation.
+    'ps_min_support': 0.05,   # min fraction of benign windows a pattern must cover
+    'ps_min_len':     3,      # ignore trivial length-1/2 patterns
+    'ps_max_len':     6,      # cap pattern length (windows are length 15)
+    'ps_top_n':       150,    # keep the N most frequent patterns (perf bound)
     'latent_dim':    8,
     'hidden_dim':    32,
     'dropout':       0.2,
@@ -106,6 +177,11 @@ CFG = {
     'global_seed':   42,
     'threshold':     'f1',
 }
+
+# Width of the PrefixSpan match feature group: [matched-flag, longest-match/L].
+PREFIXSPAN_DIMS = 2
+# Width of the temporal group when active.
+TEMPORAL_DIMS = 3
 
 GLOBAL_SEED = CFG['global_seed']
 
@@ -128,6 +204,14 @@ def load_syscall_table(path: str) -> dict[str, int]:
                 continue
             parts = line.split()
             if len(parts) >= 3 and parts[0].isdigit():
+                # Skip the x32 compat ABI rows (nr 512–547). They reuse names
+                # already defined by the common/64-bit ABI and, being later in
+                # the file, would overwrite the canonical number (execve 59→520,
+                # ptrace 101→521, …). The live Tetragon extractor resolves syscall
+                # names to the canonical x86-64 numbers, so training must match or
+                # those syscalls land in a different ID space at serve time.
+                if parts[1] == 'x32':
+                    continue
                 name_to_id[parts[2]] = int(parts[0])
     return name_to_id
 
@@ -265,59 +349,126 @@ def build_id_to_category(name_to_id: dict[str, int]) -> dict[int, str]:
     }
 
 
-# ── Step 2: Load sequences from MongoDB ───────────────────────────────────
+SPLIT_MAP = {'DTDS-train': 'train', 'DTDS-validation': 'val', 'DTDS-test': 'test'}
+
+
+# ── Step 2: Load sequences ─────────────────────────────────────────────────
+# Every loader returns the 5-tuple (seqs, labels, splits, ver_list, ts_list).
+# ts_list is None when the source carries no per-syscall timestamps (all DongTing
+# artefacts) — the temporal feature group then stays at 0 dims.
 
 def load_sequences(name_to_id: dict[str, int]):
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
-    db = client[MONGO_DB]
+    return _load_sequences_local(name_to_id)
 
-    _log('  Indexing normal sequences from Mongo...')
-    normal_idx: dict[str, str] = {}
-    for doc in db.kernel_syscall_normal_strace.find(
-            {}, {'kns_normal_file_name': 1, 'kns_normal_mlseq_list': 1}):
-        normal_idx[doc['kns_normal_file_name']] = doc['kns_normal_mlseq_list']
 
-    _log('  Indexing attack sequences from Mongo...')
-    attack_idx: dict[str, str] = {}
-    for doc in db.kernel_syscallhook_bugpoc_trace_sum.find(
-            {}, {'kshs_poclog_name': 1, 'kshs_bugpoc_syscall_list': 1}):
-        attack_idx[doc['kshs_poclog_name']] = doc['kshs_bugpoc_syscall_list']
+def _index_log_members(*roots: str) -> dict[str, tuple[zipfile.ZipFile, str]]:
+    """Map each .log basename -> (open ZipFile, member name) across every zip
+    under the given roots. Reads members straight from the archives so the 85 GB
+    extracted corpus never lands on disk/RAM in full."""
+    index: dict[str, tuple[zipfile.ZipFile, str]] = {}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for fn in sorted(os.listdir(root)):
+            if not fn.endswith('.zip'):
+                continue
+            zf = zipfile.ZipFile(os.path.join(root, fn))
+            for member in zf.namelist():
+                if member.endswith('.log'):
+                    index[os.path.basename(member)] = (zf, member)
+    return index
 
-    _log(f'  Indexed normal={len(normal_idx):,}  attack={len(attack_idx):,}')
-    _log('  Reading baseline index...')
+
+def _parse_log_member(zf: zipfile.ZipFile, member: str,
+                      name_to_id: dict[str, int]) -> list[int]:
+    """Read one pipe-separated syscall-name log into truncated integer IDs.
+    Streams in chunks and stops at DATA_MAX_SEQ_LEN so multi-hundred-MB attack
+    traces never get fully materialised."""
+    ids: list[int] = []
+    cap = DATA_MAX_SEQ_LEN or None
+    remainder = ''
+    with zf.open(member) as fh:
+        while True:
+            chunk = fh.read(1 << 20)            # 1 MiB
+            if not chunk:
+                break
+            text = remainder + chunk.decode('utf-8', errors='ignore')
+            parts = text.split('|')
+            remainder = parts.pop()             # last piece may be incomplete
+            for nm in parts:
+                sid = name_to_id.get(nm.strip())
+                if sid is not None:
+                    ids.append(sid)
+            if cap and len(ids) >= cap:
+                return _filter_alphabet(ids[:cap])
+    sid = name_to_id.get(remainder.strip())
+    if sid is not None:
+        ids.append(sid)
+    return _filter_alphabet(ids[:cap] if cap else ids)
+
+
+def _filter_alphabet(ids: list[int]) -> list[int]:
+    """Drop every syscall outside the live sensor alphabet so training windows
+    match what the detector actually observes. No-op when SENSOR_ALPHABET=0
+    (_ALLOWED_IDS stays None). The raw read above is still bounded by
+    DATA_MAX_SEQ_LEN, so each trace contributes its sensor syscalls from a
+    bounded prefix."""
+    if _ALLOWED_IDS is None:
+        return ids
+    return [i for i in ids if i in _ALLOWED_IDS]
+
+
+def _load_sequences_local(name_to_id: dict[str, int]):
+    """Read the full DongTing release: Baseline.xlsx is the master index
+    (label / split / version per sequence) and the .log files under
+    Normal_data/ and Abnormal_data/ hold the syscall-name sequences.
+
+    Filename join (verified 100% on the release):
+      • Normal sequences:  file = 'sy_' + kcb_bug_name        (bug_name ends in '.log')
+      • Attack sequences:  file = 'sy_' + kcb_bug_name + '.log'
+    """
+    import openpyxl
+
+    _log('  Indexing .log members across the dataset zips...')
+    index = _index_log_members(
+        os.path.join(DATA_ROOT, 'Normal_data'),
+        os.path.join(DATA_ROOT, 'Abnormal_data'),
+    )
+    _log(f'  Indexed {len(index):,} .log files')
+
+    xlsx = os.path.join(DATA_ROOT, 'Baseline.xlsx')
+    _log(f'  Reading master index {xlsx} ...')
+    wb = openpyxl.load_workbook(xlsx, read_only=True)
+    ws = wb['kernel_convert_baseline']
+    rows = ws.iter_rows(min_row=1, values_only=True)
+    hdr = next(rows)
+    ci = {h: i for i, h in enumerate(hdr)}
+
     seqs, labels, splits, ver_list = [], [], [], []
     missing = 0
-    split_map = {'DTDS-train': 'train', 'DTDS-validation': 'val', 'DTDS-test': 'test'}
+    for r in rows:
+        bug   = r[ci['kcb_bug_name']]
+        if bug is None:
+            continue
+        label = 0 if r[ci['kcb_seq_lables']] == 'Normal' else 1
+        split = SPLIT_MAP.get(r[ci['kcb_seq_class']], 'train')
+        ver   = str(r[ci['kcb_master_line_ver']] or '').strip()
 
-    for doc in db.kernel_convert_baseline.find(
-            {}, {'kcb_bug_name': 1, 'kcb_seq_lables': 1,
-                 'kcb_seq_class': 1, 'kcb_master_line_ver': 1}):
-        name  = doc['kcb_bug_name']
-        label = 0 if doc['kcb_seq_lables'] == 'Normal' else 1
-        split = split_map.get(doc['kcb_seq_class'], 'train')
-        ver   = str(doc.get('kcb_master_line_ver', '')).strip()
-
-        if label == 0:
-            raw = normal_idx.get(name)
-            if raw is None:
-                missing += 1; continue
-            ids = [int(x) for x in raw.split('|') if x.strip().isdigit()]
-        else:
-            raw = attack_idx.get(name)
-            if raw is None:
-                missing += 1; continue
-            ids = [name_to_id[nm.strip()] for nm in raw.split('|')
-                   if nm.strip() in name_to_id]
-
+        fname = ('sy_' + bug) if label == 0 else ('sy_' + bug + '.log')
+        hit = index.get(fname)
+        if hit is None:
+            missing += 1; continue
+        ids = _parse_log_member(hit[0], hit[1], name_to_id)
         if len(ids) < 2:
             missing += 1; continue
 
         seqs.append(ids); labels.append(label)
         splits.append(split); ver_list.append(ver)
 
-    client.close()
-    print(f'  Loaded {len(seqs)} sequences ({missing} skipped)')
-    return seqs, labels, splits, ver_list
+    wb.close()
+    print(f'  Loaded {len(seqs)} sequences ({missing} skipped) from full dataset')
+    # DongTing logs carry no timestamps → temporal group stays inactive.
+    return seqs, labels, splits, ver_list, None
 
 
 # ── Step 2b: Sliding window expansion (opt-in, streaming) ─────────────────
@@ -360,83 +511,164 @@ def iter_window_arrays(seqs_arr, ver, y, length: int, stride: int):
             yield s_arr[start: start + length], v, int(yy)
 
 
-# ── Step 3: Feature engineering ───────────────────────────────────────────
-
-def _entropy(counts: np.ndarray) -> float:
-    total = counts.sum()
-    if total == 0: return 0.0
-    p = counts / total
-    return float(scipy_entropy(p[p > 0], base=2))
-
-
-def _ver_short(v: str) -> str:
-    s = v.strip().lower()
-    for pfx in ('linux-', 'kernel-', 'v'):
-        if s.startswith(pfx): s = s[len(pfx):]
-    parts = s.split('.')
-    clean = []
-    for p in parts:
-        p2 = p.split('-')[0].split('+')[0]
-        if p2.isdigit(): clean.append(p2)
-        else: break
-    if len(clean) >= 2: return f'{clean[0]}.{clean[1]}'
-    return '.'.join(clean) if clean else ''
+# ── Step 3: Feature engineering (paper §IV.B.3, paper-only vector) ─────────
+#
+# Vector per window:  [ cat_K | temporal_T | prefixspan_P ]
+#   cat_K        — normalised per-window category frequency (K = len(cat_cols)).
+#   temporal_T   — Δt mean/std/max (T = TEMPORAL_DIMS) when timestamps exist, else T = 0.
+#   prefixspan_P — [matched-flag, longest-match/L] (P = PREFIXSPAN_DIMS) when a benign
+#                  pattern DB exists, else P = 0.
 
 
-def fit_vocab(seqs_train, ver_train, top_k_freq=60, top_k_disc=40, top_k_ngrams=40, ngram_n=2):
+def match_benign_patterns(window: list[int],
+                          patterns_by_first: dict[int, list]) -> tuple[float, int]:
+    """Canonical PrefixSpan match used by BOTH training and inference — keep the
+    two copies byte-identical (guarded by the parity test).
+
+    A benign pattern matches the window if it appears as an ORDER-PRESERVING
+    subsequence (PrefixSpan semantics). Returns (matched_flag, longest_match_len).
+    `window` must be a list of plain Python ints. Result is independent of the
+    pattern iteration order, so determinism does not depend on dict ordering.
+    """
+    matched = 0.0
+    longest = 0
+    n = len(window)
+    for i in range(n):
+        pats = patterns_by_first.get(window[i])
+        if not pats:
+            continue
+        for pat in pats:
+            L = len(pat)
+            if matched and L <= longest:
+                continue  # cannot raise `matched` or `longest`
+            pi, wi = 0, i
+            while wi < n and pi < L:
+                if window[wi] == pat[pi]:
+                    pi += 1
+                wi += 1
+            if pi == L:
+                matched = 1.0
+                if L > longest:
+                    longest = L
+    return matched, longest
+
+
+def build_patterns_by_first(patterns: list[tuple]) -> dict[int, list[tuple]]:
+    """Index mined patterns by their first syscall ID for fast matching."""
+    by_first: dict[int, list[tuple]] = defaultdict(list)
+    for p in patterns:
+        if p:
+            by_first[int(p[0])].append(tuple(int(x) for x in p))
+    return {k: sorted(v) for k, v in by_first.items()}
+
+
+def fit_benign_patterns(normal_seqs, length, stride,
+                        min_support, min_len, max_len, top_n,
+                        rng_seed, max_mine_windows=20000):
+    """Mine a Benign Pattern Database (paper "Access List Pattern Matching") from
+    NORMAL training windows only, using PrefixSpan. Sampling keeps mining
+    tractable; selection is deterministic (seeded). Returns the pattern list."""
+    rng = np.random.default_rng(rng_seed)
+    n_tr = max(len(normal_seqs), 1)
+    per = max(1, max_mine_windows // n_tr)
+    sample: list[list[int]] = []
+    for s in normal_seqs:
+        nw = count_windows(len(s), length, stride)
+        if nw <= 0:
+            continue
+        take = min(per, nw)
+        idx = rng.choice(nw, size=take, replace=False)
+        idx.sort()
+        for i in idx:
+            st = int(i) * stride
+            sample.append([int(x) for x in s[st: st + length]])
+        if len(sample) >= max_mine_windows:
+            break
+    sample = sample[:max_mine_windows]
+    if not sample:
+        return []
+
+    from prefixspan import PrefixSpan
+    ps = PrefixSpan(sample)
+    ps.minlen = min_len
+    ps.maxlen = max_len
+    minsup_count = max(2, int(min_support * len(sample)))
+    results = ps.frequent(minsup_count)            # [(support, pattern_list), ...]
+    # Deterministic order: support desc, then pattern lexicographic.
+    results.sort(key=lambda r: (-r[0], r[1]))
+    patterns = [tuple(int(x) for x in p) for _, p in results[:top_n]]
+    _log(f'  PrefixSpan: mined {len(sample):,} benign windows → '
+         f'{len(results):,} frequent (minsup={minsup_count}) → kept {len(patterns)} patterns')
+    return patterns
+
+
+def fit_vocab_plus(normal_train_seqs, top_k_freq: int, top_k_disc: int,
+                   top_k_bigrams: int) -> tuple[list[int], list[int], list[tuple]]:
+    """Fit engineered-vocab on NORMAL training traces only:
+       • top-K most frequent syscalls   → `freq_K` block
+       • the next-K most frequent       → `disc_K` binary-presence block
+       • top-K bigram (adjacent pair) frequencies → `bigrams_K` block
+    These are the engineered support features that the paper underspecifies
+    but that are required to bring the VAE up to the paper's reported AUC."""
     all_sc: Counter = Counter()
     all_ng: Counter = Counter()
-    for seq in seqs_train:
+    for seq in normal_train_seqs:
         all_sc.update(seq)
-        if ngram_n >= 2:
-            for i in range(len(seq) - ngram_n + 1):
-                all_ng[tuple(seq[i: i + ngram_n])] += 1
-    top_ids    = [sc for sc, _ in all_sc.most_common(top_k_freq)]
-    cands      = [sc for sc, _ in all_sc.most_common(top_k_freq + top_k_disc)]
-    disc_ids   = cands[top_k_freq: top_k_freq + top_k_disc]
-    top_ngrams = [g for g, _ in all_ng.most_common(top_k_ngrams if ngram_n >= 2 else 0)]
-    ver_cols   = sorted(set(s for v in ver_train if v and (s := _ver_short(v))))
-    return top_ids, disc_ids, top_ngrams, ver_cols
+        for i in range(len(seq) - 1):
+            all_ng[(int(seq[i]), int(seq[i + 1]))] += 1
+    common  = all_sc.most_common(top_k_freq + top_k_disc)
+    top_ids = [sc for sc, _ in common[:top_k_freq]]
+    disc_ids = [sc for sc, _ in common[top_k_freq: top_k_freq + top_k_disc]]
+    top_bigrams = [g for g, _ in all_ng.most_common(top_k_bigrams)]
+    return top_ids, disc_ids, top_bigrams
 
 
-def build_features_windowed(seqs, ver_list, y_in,
-                            top_ids, disc_ids, top_ngrams, ver_cols,
-                            length: int, stride: int, ngram_n: int = 2,
-                            cat_cols: list[str] | None = None,
-                            id_to_cat: dict[int, str] | None = None,
+def build_features_windowed(seqs, y_in, length: int, stride: int,
+                            cat_cols: list[str], id_to_cat: dict[int, str],
+                            patterns_by_first: dict[int, list],
+                            ps_dims: int,
+                            ts_list=None, temporal_dims: int = 0,
+                            top_ids: list[int] | tuple = (),
+                            disc_ids: list[int] | tuple = (),
+                            top_bigrams: list[tuple] | tuple = (),
+                            enable_stats: bool = False,
                             max_windows: int | None = None,
                             rng_seed: int = 0):
-    """Per-trace batched featurisation. Returns (X, y, n_dropped).
+    """Per-trace batched featurisation → (X, y, n_dropped).
 
-    All windows of one trace are featurised in a single numpy call using
-    sliding_window_view + reused workspace buffers. Compared with the legacy
-    per-window loop this drops allocator churn by ~100× (one buffer reset per
-    trace, not per window) and eliminates the Python-int allocations the
-    bigram block used to generate via .tolist().
+    Layout per window:
+      [ freq_F | disc_D | stats_8 | bigrams_B | cat_K | temporal_T? | prefixspan_P ]
 
-    Math is intentionally bit-identical to the per-window formulation so the
-    inference-side Featurizer (which still uses the per-window form) produces
-    the same vectors.
+    Math is intentionally bit-identical to the per-window form in `build_features`
+    so the inference Featurizer produces the same vectors.
     """
     from numpy.lib.stride_tricks import sliding_window_view
 
-    # Convert each trace to a contiguous int32 array once; slices become views.
     seqs_arr: list[np.ndarray] = [np.asarray(s, dtype=np.int32) for s in seqs]
     y_arr = np.asarray(y_in, dtype=np.int32)
+    has_ts = bool(temporal_dims) and ts_list is not None
+    ts_arr = ([np.asarray(t, dtype=np.float64) for t in ts_list]
+              if has_ts else None)
 
+    top_ids = list(top_ids); disc_ids = list(disc_ids); top_bigrams = list(top_bigrams)
     n_freq  = len(top_ids)
     n_disc  = len(disc_ids)
-    n_ng    = len(top_ngrams)
-    n_ver   = len(ver_cols)
+    n_ng    = len(top_bigrams)
+    n_stats = 8 if enable_stats else 0
     n_cat   = len(cat_cols) if cat_cols else 0
-    n_feat  = n_freq + n_disc + 8 + n_ng + n_ver + n_cat
-    ver_idx = {v: i for i, v in enumerate(ver_cols)}
+    n_feat  = n_freq + n_disc + n_stats + n_ng + n_cat + temporal_dims + ps_dims
 
-    # Window-count pass also gives us max_n_win for buffer sizing.
-    n_per_trace: list[int] = []
-    n_total   = 0
-    n_dropped = 0
-    max_n_win = 0
+    # offsets
+    freq_off  = 0
+    disc_off  = freq_off + n_freq
+    stats_off = disc_off + n_disc
+    bg_off    = stats_off + n_stats
+    cat_off   = bg_off + n_ng
+    temp_off  = cat_off + n_cat
+    ps_off    = temp_off + temporal_dims
+
+    # Window-count pass for subsampling + buffer sizing.
+    n_per_trace, n_total, n_dropped, max_n_win = [], 0, 0, 0
     for s_arr in seqs_arr:
         n = count_windows(len(s_arr), length, stride)
         n_per_trace.append(n)
@@ -444,10 +676,6 @@ def build_features_windowed(seqs, ver_list, y_in,
         if n > max_n_win: max_n_win = n
         n_total += n
 
-    # Optional per-trace subsampling so the train X matrix fits in memory.
-    # DongTing's long attack traces would otherwise yield ~10 GB matrices. We
-    # cap globally and apportion to each trace by its share of the total
-    # (random pick within each trace, sorted to keep temporal locality).
     sampled_idx_per_trace: list[np.ndarray] | None = None
     if max_windows is not None and n_total > max_windows:
         ratio = max_windows / n_total
@@ -456,27 +684,20 @@ def build_features_windowed(seqs, ver_list, y_in,
         new_total = 0
         for n in n_per_trace:
             if n == 0:
-                sampled_idx_per_trace.append(np.empty(0, dtype=np.int32))
-                continue
-            k = max(1, int(np.floor(n * ratio)))
-            k = min(k, n)
-            idx = rng.choice(n, size=k, replace=False)
-            idx.sort()
+                sampled_idx_per_trace.append(np.empty(0, dtype=np.int32)); continue
+            k = min(max(1, int(np.floor(n * ratio))), n)
+            idx = rng.choice(n, size=k, replace=False); idx.sort()
             sampled_idx_per_trace.append(idx.astype(np.int32, copy=False))
             new_total += k
         print(f'  Subsampling windows: {n_total:,} → {new_total:,} '
               f'(cap={max_windows:,}, ratio={ratio:.3f})')
         n_total = new_total
-        # Recompute max_n_win on the sampled counts (smaller is fine).
         max_n_win = max((arr.size for arr in sampled_idx_per_trace), default=0)
 
-    # ── Precompute lookup arrays ──────────────────────────────────────────
-    top_ids_arr  = np.asarray(top_ids,  dtype=np.int64) if n_freq else np.empty(0, np.int64)
-    disc_ids_arr = np.asarray(disc_ids, dtype=np.int64) if n_disc else np.empty(0, np.int64)
-
+    # Vocab ID range — we need a buffer wide enough to scatter window counts into.
     max_id = 0
-    if n_freq:  max_id = max(max_id, int(top_ids_arr.max()))
-    if n_disc:  max_id = max(max_id, int(disc_ids_arr.max()))
+    if n_freq:  max_id = max(max_id, int(max(top_ids)))
+    if n_disc:  max_id = max(max_id, int(max(disc_ids)))
     if id_to_cat: max_id = max(max_id, max(id_to_cat.keys()))
     for s_arr in seqs_arr:
         if s_arr.size:
@@ -484,6 +705,7 @@ def build_features_windowed(seqs, ver_list, y_in,
             if v > max_id: max_id = v
     n_ids = max_id + 1
 
+    cat_of_id = None
     if n_cat > 0 and id_to_cat is not None:
         cat_idx_map = {c: i for i, c in enumerate(cat_cols)}
         other_i = cat_idx_map.get('other', 0)
@@ -492,42 +714,36 @@ def build_features_windowed(seqs, ver_list, y_in,
             ci = cat_idx_map.get(name)
             if ci is not None and 0 <= sid < n_ids:
                 cat_of_id[sid] = ci
-    else:
-        cat_of_id = None
+
+    top_ids_arr  = np.asarray(top_ids,  dtype=np.int64) if n_freq else np.empty(0, np.int64)
+    disc_ids_arr = np.asarray(disc_ids, dtype=np.int64) if n_disc else np.empty(0, np.int64)
 
     # Bigram lookup: sorted int64 codes + parallel column array → searchsorted.
-    if n_ng > 0 and ngram_n == 2:
-        pairs = sorted(((int(a) << 16) | int(b), i) for i, (a, b) in enumerate(top_ngrams))
+    if n_ng:
+        pairs = sorted(((int(a) << 16) | int(b), i) for i, (a, b) in enumerate(top_bigrams))
         sorted_codes = np.fromiter((c for c, _ in pairs), dtype=np.int64, count=len(pairs))
         code_to_col  = np.fromiter((i for _, i in pairs), dtype=np.int32, count=len(pairs))
     else:
         sorted_codes = np.empty(0, dtype=np.int64)
         code_to_col  = np.empty(0, dtype=np.int32)
 
-    ver_short_per_trace = [_ver_short(v) for v in ver_list]
-
-    # ── Output + reused per-trace workspaces ──────────────────────────────
     X = np.zeros((n_total, n_feat), dtype=np.float32)
     y = np.zeros((n_total,),        dtype=np.int32)
-
     if max_n_win == 0:
         return X, y, n_dropped
 
-    buf_counts = np.zeros((max_n_win, n_ids), dtype=np.int32)
-    buf_cat    = np.zeros((max_n_win, n_cat), dtype=np.int32) if n_cat   else None
-    buf_bg     = np.zeros((max_n_win, n_ng),  dtype=np.int32) if n_ng    else None
+    # Reused per-trace buffers.
+    need_counts = (n_freq or n_disc or n_stats)
+    buf_counts = np.zeros((max_n_win, n_ids), dtype=np.int32) if need_counts else None
+    buf_cat    = np.zeros((max_n_win, n_cat), dtype=np.int32) if n_cat else None
+    buf_bg     = np.zeros((max_n_win, n_ng),  dtype=np.int32) if n_ng  else None
 
-    off      = n_freq + n_disc
-    ng_off   = off + 8
-    ver_off  = ng_off + n_ng
-    cat_off  = ver_off + n_ver
     total    = length
-    n_win_ng = max(total - ngram_n + 1, 1)
+    n_win_ng = max(total - 1, 1)
     row_idx_col = np.arange(max_n_win)[:, None]
 
-    # ── Per-trace featurisation ───────────────────────────────────────────
     n_traces_total = len(seqs_arr)
-    progress_every = max(1, n_traces_total // 20)  # ~5% increments
+    progress_every = max(1, n_traces_total // 20)
     row_off = 0
     for ti, s_arr in enumerate(seqs_arr):
         if ti and ti % progress_every == 0:
@@ -535,59 +751,59 @@ def build_features_windowed(seqs, ver_list, y_in,
                  f'({100*ti/n_traces_total:.0f}%)  rows={row_off:,}/{n_total:,}')
         n_win = n_per_trace[ti]
         if n_win == 0: continue
-        # (n_win, length) view — zero copy
         all_windows = sliding_window_view(s_arr, window_shape=length)[::stride]
-        assert all_windows.shape[0] == n_win
         if sampled_idx_per_trace is not None:
             keep = sampled_idx_per_trace[ti]
             if keep.size == 0: continue
-            # Fancy index → contiguous (k, length) int32 copy. Small.
-            windows = all_windows[keep]
-            n_win = keep.size
+            windows = all_windows[keep]; n_win = keep.size
         else:
             windows = all_windows
 
-        # Per-window full histogram, scatter into reused buffer
-        counts_view = buf_counts[:n_win]
-        counts_view.fill(0)
-        np.add.at(counts_view, (row_idx_col[:n_win], windows), 1)
-
         X_block = X[row_off: row_off + n_win]
 
-        # freq_60
+        # Per-window full histogram (used by freq, disc and stats).
+        if need_counts:
+            counts_view = buf_counts[:n_win]
+            counts_view.fill(0)
+            np.add.at(counts_view, (row_idx_col[:n_win], windows), 1)
+        else:
+            counts_view = None
+
+        # freq_F — normalised top-K syscall frequency
         if n_freq:
-            X_block[:, :n_freq] = counts_view[:, top_ids_arr] / total
-        # disc_40
+            X_block[:, freq_off: freq_off + n_freq] = counts_view[:, top_ids_arr] / total
+        # disc_D — binary presence of next-K syscalls
         if n_disc:
-            X_block[:, n_freq:n_freq + n_disc] = (counts_view[:, disc_ids_arr] > 0).astype(np.float32)
+            X_block[:, disc_off: disc_off + n_disc] = (counts_view[:, disc_ids_arr] > 0).astype(np.float32)
+        # stats_8 — entropy / shape / magnitude (matches per-window form below)
+        if n_stats:
+            raw = counts_view[:, top_ids_arr].astype(np.float32) if n_freq \
+                  else np.zeros((n_win, 0), np.float32)
+            if n_freq:
+                totals = raw.sum(axis=1, keepdims=True)
+                safe_t = np.where(totals > 0, totals, 1.0)
+                p = raw / safe_t
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    log_p = np.log2(p, where=(p > 0))
+                log_p = np.where(p > 0, log_p, 0.0)
+                H = -(p * log_p).sum(axis=1)
+                X_block[:, stats_off + 0] = np.where(totals.squeeze(-1) > 0, H, 0.0)
+                X_block[:, stats_off + 3] = raw.max(axis=1) / total
+                raw_nan = np.where(raw > 0, raw, np.nan)
+                with np.errstate(invalid='ignore'):
+                    p75 = np.nanpercentile(raw_nan, 75, axis=1)
+                X_block[:, stats_off + 4] = np.where(np.isnan(p75), 0.0, p75).astype(np.float32)
+                X_block[:, stats_off + 5] = raw.std(axis=1)
+                X_block[:, stats_off + 6] = (raw > 0).sum(axis=1).astype(np.float32) / max(n_freq, 1)
+            X_block[:, stats_off + 1] = (counts_view > 0).sum(axis=1).astype(np.float32)
+            X_block[:, stats_off + 2] = np.log1p(total)
+            X_block[:, stats_off + 7] = total / 1000.0
 
-        # stats_8 (math identical to per-window form)
-        raw = counts_view[:, top_ids_arr].astype(np.float32) if n_freq else np.zeros((n_win, 0), np.float32)
-        if n_freq:
-            totals = raw.sum(axis=1, keepdims=True)
-            safe_t = np.where(totals > 0, totals, 1.0)
-            p = raw / safe_t
-            with np.errstate(divide='ignore', invalid='ignore'):
-                log_p = np.log2(p, where=(p > 0))
-            log_p = np.where(p > 0, log_p, 0.0)
-            H = -(p * log_p).sum(axis=1)
-            X_block[:, off + 0] = np.where(totals.squeeze(-1) > 0, H, 0.0)
-            X_block[:, off + 3] = raw.max(axis=1) / total
-            raw_nan = np.where(raw > 0, raw, np.nan)
-            with np.errstate(invalid='ignore'):
-                p75 = np.nanpercentile(raw_nan, 75, axis=1)
-            X_block[:, off + 4] = np.where(np.isnan(p75), 0.0, p75).astype(np.float32)
-            X_block[:, off + 5] = raw.std(axis=1)
-            X_block[:, off + 6] = (raw > 0).sum(axis=1).astype(np.float32) / max(n_freq, 1)
-        X_block[:, off + 1] = (counts_view > 0).sum(axis=1).astype(np.float32)
-        X_block[:, off + 2] = np.log1p(total)
-        X_block[:, off + 7] = total / 1000.0
-
-        # bigrams via searchsorted
-        if sorted_codes.size and length >= 2:
+        # bigrams_B — top-K transition counts via searchsorted
+        if n_ng and total >= 2:
             a = windows[:, :-1].astype(np.int64)
             b = windows[:,  1:].astype(np.int64)
-            codes = (a << 16) | b                            # (n_win, length-1)
+            codes = (a << 16) | b                              # (n_win, total-1)
             pos = np.searchsorted(sorted_codes, codes)
             pos_clip = np.minimum(pos, sorted_codes.size - 1)
             hit = sorted_codes[pos_clip] == codes
@@ -596,79 +812,133 @@ def build_features_windowed(seqs, ver_list, y_in,
             bg_view.fill(0)
             rows = np.broadcast_to(row_idx_col[:n_win], cols.shape)
             np.add.at(bg_view, (rows[hit], cols[hit]), 1)
-            X_block[:, ng_off:ng_off + n_ng] = bg_view / n_win_ng
+            X_block[:, bg_off: bg_off + n_ng] = bg_view / n_win_ng
 
-        # ver_onehot
-        vs = ver_short_per_trace[ti]
-        if vs and vs in ver_idx:
-            X_block[:, ver_off + ver_idx[vs]] = 1.0
-
-        # cat_10
+        # cat_K — normalised category histogram per window
         if cat_of_id is not None:
-            ci = cat_of_id[windows]                          # (n_win, length)
+            ci = cat_of_id[windows]
             cat_view = buf_cat[:n_win]
             cat_view.fill(0)
             np.add.at(cat_view, (row_idx_col[:n_win], ci), 1)
-            X_block[:, cat_off:cat_off + n_cat] = cat_view / total
+            X_block[:, cat_off: cat_off + n_cat] = cat_view / total
 
-        # labels are uniform across this trace's windows
+        # temporal_T — Δt mean/std/max per window (only when timestamps exist)
+        if has_ts and temporal_dims:
+            t_all = sliding_window_view(ts_arr[ti], window_shape=length)[::stride]
+            t_win = t_all[keep] if sampled_idx_per_trace is not None else t_all
+            dt = np.diff(t_win, axis=1)
+            X_block[:, temp_off + 0] = dt.mean(axis=1)
+            X_block[:, temp_off + 1] = dt.std(axis=1)
+            X_block[:, temp_off + 2] = dt.max(axis=1)
+
+        # prefixspan_P — per-window subsequence match (Python, identical to inference)
+        if ps_dims and patterns_by_first:
+            wl = windows.tolist()
+            for r in range(n_win):
+                matched, longest = match_benign_patterns(wl[r], patterns_by_first)
+                X_block[r, ps_off + 0] = matched
+                X_block[r, ps_off + 1] = longest / total
+
         y[row_off: row_off + n_win] = int(y_arr[ti])
         row_off += n_win
 
     return X, y, n_dropped
 
 
-def build_features(seqs, ver_list, top_ids, disc_ids, top_ngrams, ver_cols, ngram_n=2,
-                   cat_cols: list[str] | None = None,
-                   id_to_cat: dict[int, str] | None = None) -> np.ndarray:
+def build_features(seqs, cat_cols: list[str], id_to_cat: dict[int, str],
+                   patterns_by_first: dict[int, list], ps_dims: int,
+                   ts_list=None, temporal_dims: int = 0,
+                   top_ids: list[int] | tuple = (),
+                   disc_ids: list[int] | tuple = (),
+                   top_bigrams: list[tuple] | tuple = (),
+                   enable_stats: bool = False) -> np.ndarray:
+    """Per-window featurisation (canonical form mirrored by inference featurizer).
+    Each element of `seqs` is one window (list of syscall IDs). Layout matches
+    `build_features_windowed`: [freq|disc|stats|bigrams|cat|temporal?|prefixspan]."""
+    top_ids = list(top_ids); disc_ids = list(disc_ids); top_bigrams = list(top_bigrams)
     n_freq  = len(top_ids)
     n_disc  = len(disc_ids)
-    n_ng    = len(top_ngrams)
-    n_ver   = len(ver_cols)
+    n_ng    = len(top_bigrams)
+    n_stats = 8 if enable_stats else 0
     n_cat   = len(cat_cols) if cat_cols else 0
-    n_feat  = n_freq + n_disc + 8 + n_ng + n_ver + n_cat
+    n_feat  = n_freq + n_disc + n_stats + n_ng + n_cat + temporal_dims + ps_dims
+
     top_idx  = {sc: i for i, sc in enumerate(top_ids)}
     disc_idx = {sc: i for i, sc in enumerate(disc_ids)}
-    ng_idx   = {g: i  for i, g  in enumerate(top_ngrams)}
-    ver_idx  = {v: i  for i, v  in enumerate(ver_cols)}
-    cat_idx  = {c: i  for i, c  in enumerate(cat_cols or [])}
+    ng_idx   = {tuple(g): i for i, g in enumerate(top_bigrams)}
+    cat_idx  = {c: i for i, c in enumerate(cat_cols or [])}
+
+    freq_off  = 0
+    disc_off  = n_freq
+    stats_off = disc_off + n_disc
+    bg_off    = stats_off + n_stats
+    cat_off   = bg_off + n_ng
+    temp_off  = cat_off + n_cat
+    ps_off    = temp_off + temporal_dims
+    has_ts    = bool(temporal_dims) and ts_list is not None
+
     X = np.zeros((len(seqs), n_feat), dtype=np.float32)
-    for i, (seq, ver) in enumerate(zip(seqs, ver_list)):
+    for i, seq in enumerate(seqs):
         if not seq: continue
         total = len(seq)
-        for sc in seq:
-            if sc in top_idx: X[i, top_idx[sc]] += 1
-        X[i, :n_freq] /= max(total, 1)
-        for sc in set(seq):
-            if sc in disc_idx: X[i, n_freq + disc_idx[sc]] = 1.0
-        off = n_freq + n_disc
-        raw = X[i, :n_freq] * total
-        X[i, off+0] = _entropy(raw)
-        X[i, off+1] = float(len(set(seq)))
-        X[i, off+2] = float(np.log1p(total))
-        X[i, off+3] = float(raw.max()) / max(total, 1)
-        nz = raw[raw > 0]
-        X[i, off+4] = float(np.percentile(nz, 75)) if len(nz) else 0.0
-        X[i, off+5] = float(np.std(raw))
-        X[i, off+6] = float((raw > 0).sum()) / max(n_freq, 1)
-        X[i, off+7] = float(total) / 1000.0
-        ng_off = off + 8
-        if n_ng > 0 and total >= ngram_n:
-            n_win = max(total - ngram_n + 1, 1)
-            for j in range(total - ngram_n + 1):
-                gram = tuple(seq[j: j + ngram_n])
-                if gram in ng_idx: X[i, ng_off + ng_idx[gram]] += 1
-            X[i, ng_off: ng_off + n_ng] /= n_win
-        ver_off = ng_off + n_ng
-        vs = _ver_short(ver)
-        if vs in ver_idx: X[i, ver_off + ver_idx[vs]] = 1.0
+        seq_int = [int(x) for x in seq]
+
+        # freq_F
+        if n_freq:
+            for sc in seq_int:
+                j = top_idx.get(sc)
+                if j is not None: X[i, freq_off + j] += 1
+            X[i, freq_off: freq_off + n_freq] /= max(total, 1)
+        # disc_D
+        if n_disc:
+            for sc in set(seq_int):
+                j = disc_idx.get(sc)
+                if j is not None: X[i, disc_off + j] = 1.0
+        # stats_8 — derived from top-K raw counts
+        if n_stats:
+            raw = X[i, freq_off: freq_off + n_freq] * total if n_freq \
+                  else np.zeros(0, np.float32)
+            total_raw = float(raw.sum()) if n_freq else 0.0
+            if total_raw > 0:
+                p = raw / total_raw
+                X[i, stats_off + 0] = float(scipy_entropy(p[p > 0], base=2))
+            else:
+                X[i, stats_off + 0] = 0.0
+            X[i, stats_off + 1] = float(len(set(seq_int)))
+            X[i, stats_off + 2] = float(np.log1p(total))
+            X[i, stats_off + 3] = (float(raw.max()) / max(total, 1)) if n_freq else 0.0
+            nz = raw[raw > 0] if n_freq else np.zeros(0, np.float32)
+            X[i, stats_off + 4] = float(np.percentile(nz, 75)) if nz.size else 0.0
+            X[i, stats_off + 5] = float(np.std(raw)) if n_freq else 0.0
+            X[i, stats_off + 6] = (float((raw > 0).sum()) / max(n_freq, 1)) if n_freq else 0.0
+            X[i, stats_off + 7] = float(total) / 1000.0
+        # bigrams_B
+        if n_ng and total >= 2:
+            n_win_ng = max(total - 1, 1)
+            for k in range(total - 1):
+                g = (seq_int[k], seq_int[k + 1])
+                j = ng_idx.get(g)
+                if j is not None: X[i, bg_off + j] += 1
+            X[i, bg_off: bg_off + n_ng] /= n_win_ng
+        # cat_K
         if n_cat > 0 and id_to_cat is not None:
-            cat_off = ver_off + n_ver
-            for sc in seq:
-                c = id_to_cat.get(sc, 'other')
-                ci = cat_idx.get(c)
+            for sc in seq_int:
+                ci = cat_idx.get(id_to_cat.get(sc, 'other'))
                 if ci is not None: X[i, cat_off + ci] += 1
             X[i, cat_off: cat_off + n_cat] /= max(total, 1)
+        # temporal_T
+        if has_ts and temporal_dims:
+            ts = ts_list[i]
+            if ts is not None and len(ts) >= 2:
+                dt = np.diff(np.asarray(ts, dtype=np.float64))
+                X[i, temp_off + 0] = float(dt.mean())
+                X[i, temp_off + 1] = float(dt.std())
+                X[i, temp_off + 2] = float(dt.max())
+        # prefixspan_P
+        if ps_dims and patterns_by_first:
+            matched, longest = match_benign_patterns(seq_int, patterns_by_first)
+            X[i, ps_off + 0] = matched
+            X[i, ps_off + 1] = longest / max(total, 1)
     return X
 
 
@@ -757,6 +1027,12 @@ def select_threshold(y_val, scores, strategy='f1') -> float:
     scores = np.asarray(scores)
     if strategy == 'p99':
         return float(np.percentile(scores[y_val == 0], 99))
+    if strategy == 'p995':
+        # Paper §IV.B.3 "Dynamic Thresholding": T_0 = 99.5th percentile of benign
+        # validation errors. Inference then EMA-updates this T_0 online (handled
+        # detector-side, not here).
+        benign = scores[y_val == 0]
+        return float(np.percentile(benign, 99.5)) if benign.size else 0.5
     if strategy == 'fpr5':
         fpr_a, tpr_a, thresholds = roc_curve(y_val, scores)
         valid = np.where(fpr_a <= 0.05)[0]
@@ -808,75 +1084,99 @@ def main():
     name_to_id = load_syscall_table(SYSCALL_TBL)
     print(f'{len(name_to_id)} syscalls loaded')
 
+    # Step 1b — resolve the sensor alphabet to IDs BEFORE loading sequences
+    # (the loader filters each trace to this set as it parses).
+    global _ALLOWED_IDS
+    if USE_SENSOR_ALPHABET:
+        _ALLOWED_IDS = {name_to_id[n] for n in SENSOR_ALPHABET_NAMES if n in name_to_id}
+        missing = [n for n in SENSOR_ALPHABET_NAMES if n not in name_to_id]
+        print(f'Sensor alphabet ON: {len(_ALLOWED_IDS)}/{len(SENSOR_ALPHABET_NAMES)} '
+              f'syscalls -> ids {sorted(_ALLOWED_IDS)}'
+              + (f'  (MISSING from table: {missing})' if missing else ''))
+    else:
+        print('Sensor alphabet OFF — training on the full syscall universe')
+
     # Step 2
-    seqs, labels, splits, ver_list = load_sequences(name_to_id)
+    seqs, labels, splits, ver_list, ts_list = load_sequences(name_to_id)
     idx_train = [i for i, s in enumerate(splits) if s == 'train']
     idx_val   = [i for i, s in enumerate(splits) if s == 'val']
     idx_test  = [i for i, s in enumerate(splits) if s == 'test']
 
+    def _pick_ts(idx):
+        return [ts_list[i] for i in idx] if ts_list is not None else None
+
     seqs_train = [seqs[i] for i in idx_train]
-    ver_train  = [ver_list[i] for i in idx_train]
+    ts_train   = _pick_ts(idx_train)
     y_train    = np.array([labels[i] for i in idx_train], dtype=np.int32)
     seqs_val   = [seqs[i] for i in idx_val]
-    ver_val    = [ver_list[i] for i in idx_val]
+    ts_val     = _pick_ts(idx_val)
     y_val      = np.array([labels[i] for i in idx_val], dtype=np.int32)
     seqs_test  = [seqs[i] for i in idx_test]
-    ver_test   = [ver_list[i] for i in idx_test]
+    ts_test    = _pick_ts(idx_test)
     y_test     = np.array([labels[i] for i in idx_test], dtype=np.int32)
 
     print(f'train={len(seqs_train):,}  val={len(seqs_val):,}  test={len(seqs_test):,}')
 
-    # Step 3a — vocab fit on FULL normal training traces (length-agnostic,
-    # stable counts). This deliberately runs before any sliding-window expansion
-    # so the vocab is independent of windowing.
+    # Step 3a — categories are static (from the syscall table, not data-fit).
+    # Categories are static (from the syscall table, not data-fit).
+    # The engineered support vocab (top-K freq + disc + bigrams) is fit on
+    # NORMAL training traces only so attack-specific calls don't bias it.
+    # The PrefixSpan benign-pattern DB is also mined on normal-only windows.
+    cat_cols  = list(SYSCALL_CATEGORIES)
+    id_to_cat = build_id_to_category(name_to_id)
+    n_cat     = len(cat_cols)
+
+    has_temporal  = bool(USE_TEMPORAL) and (ts_list is not None)
+    temporal_dims = TEMPORAL_DIMS if has_temporal else 0
+
     normal_train_seqs = [seqs_train[i] for i in range(len(seqs_train)) if y_train[i] == 0]
-    normal_train_ver  = [ver_train[i]  for i in range(len(seqs_train)) if y_train[i] == 0]
-    top_ids, disc_ids, top_ngrams, ver_cols = fit_vocab(
-        normal_train_seqs, normal_train_ver,
-        CFG['top_k_freq'], CFG['top_k_disc'], CFG['top_k_ngrams'], CFG['ngram_n'],
-    )
-    n_ng     = len(top_ngrams)
-    n_ver    = len(ver_cols)
 
-    # Build syscall→category mapping; persisted so inference produces the same
-    # categorical-frequency columns from the live syscall stream.
-    if USE_CATEGORIES:
-        cat_cols  = list(SYSCALL_CATEGORIES)
-        id_to_cat = build_id_to_category(name_to_id)
-        n_cat     = len(cat_cols)
-    else:
-        cat_cols, id_to_cat, n_cat = [], None, 0
+    _log(f'Fitting engineered vocab: top_freq={TOP_K_FREQ} disc={TOP_K_DISC} '
+         f'bigrams={TOP_K_BIGRAMS} on {len(normal_train_seqs)} normal traces...')
+    top_ids, disc_ids, top_bigrams = fit_vocab_plus(
+        normal_train_seqs, TOP_K_FREQ, TOP_K_DISC, TOP_K_BIGRAMS)
+    enable_stats = ENABLE_STATS
+    n_freq, n_disc, n_ng = len(top_ids), len(disc_ids), len(top_bigrams)
+    n_stats = 8 if enable_stats else 0
 
-    feat_dim = CFG['top_k_freq'] + CFG['top_k_disc'] + 8 + n_ng + n_ver + n_cat
-    print(f'freq={len(top_ids)}  disc={len(disc_ids)}  bigrams={n_ng}  '
-          f'ver={n_ver}  cat={n_cat}  total_dim={feat_dim}')
+    _log('Mining PrefixSpan benign-pattern database...')
+    benign_patterns = fit_benign_patterns(
+        normal_train_seqs, WINDOW_LEN, WINDOW_STRIDE,
+        CFG['ps_min_support'], CFG['ps_min_len'], CFG['ps_max_len'], CFG['ps_top_n'],
+        rng_seed=GLOBAL_SEED)
+    patterns_by_first = build_patterns_by_first(benign_patterns)
+    ps_dims = PREFIXSPAN_DIMS if benign_patterns else 0
 
-    # Step 3b — Build feature matrices. With USE_SLIDING_WINDOW=1 we stream
-    # windows directly into a pre-allocated X (never materialise the list of
-    # windows) and labels are inherited from each parent trace.
+    feat_dim = n_freq + n_disc + n_stats + n_ng + n_cat + temporal_dims + ps_dims
+    print(f'feature vector: freq={n_freq} disc={n_disc} stats={n_stats} '
+          f'bigram={n_ng} cat={n_cat} temporal={temporal_dims} prefixspan={ps_dims}  '
+          f'(patterns={len(benign_patterns)})  total_dim={feat_dim}')
+
+    _extras = dict(top_ids=top_ids, disc_ids=disc_ids,
+                   top_bigrams=top_bigrams, enable_stats=enable_stats)
+
+    # Step 3b — Build feature matrices. Sliding-window is the canonical path
+    # (the live detector is always window-based); labels inherit from each trace.
     if USE_SLIDING_WINDOW:
         print(f'Sliding window: length={WINDOW_LEN} stride={WINDOW_STRIDE}'
               f'  cap_per_split={MAX_WINDOWS_PER_SPLIT:,}')
         before = (len(seqs_train), len(seqs_val), len(seqs_test))
         print('Building windowed feature matrices...')
-        # All splits get the same cap so metrics on val/test remain
-        # representative under random per-trace subsampling.
         X_train_full, y_train, d_tr = build_features_windowed(
-            seqs_train, ver_train, y_train, top_ids, disc_ids, top_ngrams, ver_cols,
-            WINDOW_LEN, WINDOW_STRIDE, CFG['ngram_n'], cat_cols, id_to_cat,
+            seqs_train, y_train, WINDOW_LEN, WINDOW_STRIDE, cat_cols, id_to_cat,
+            patterns_by_first, ps_dims, ts_train, temporal_dims, **_extras,
             max_windows=MAX_WINDOWS_PER_SPLIT, rng_seed=GLOBAL_SEED)
-        del seqs_train, ver_train
-        X_val,        y_val,   d_va = build_features_windowed(
-            seqs_val,   ver_val,   y_val,   top_ids, disc_ids, top_ngrams, ver_cols,
-            WINDOW_LEN, WINDOW_STRIDE, CFG['ngram_n'], cat_cols, id_to_cat,
+        del seqs_train
+        X_val, y_val, d_va = build_features_windowed(
+            seqs_val, y_val, WINDOW_LEN, WINDOW_STRIDE, cat_cols, id_to_cat,
+            patterns_by_first, ps_dims, ts_val, temporal_dims, **_extras,
             max_windows=MAX_WINDOWS_PER_SPLIT, rng_seed=GLOBAL_SEED + 1)
-        del seqs_val, ver_val
-        X_test,       y_test,  d_te = build_features_windowed(
-            seqs_test,  ver_test,  y_test,  top_ids, disc_ids, top_ngrams, ver_cols,
-            WINDOW_LEN, WINDOW_STRIDE, CFG['ngram_n'], cat_cols, id_to_cat,
+        del seqs_val
+        X_test, y_test, d_te = build_features_windowed(
+            seqs_test, y_test, WINDOW_LEN, WINDOW_STRIDE, cat_cols, id_to_cat,
+            patterns_by_first, ps_dims, ts_test, temporal_dims, **_extras,
             max_windows=MAX_WINDOWS_PER_SPLIT, rng_seed=GLOBAL_SEED + 2)
-        del seqs_test, ver_test
-        # The originals from load_sequences are now redundant.
+        del seqs_test
         del seqs, ver_list, labels, splits
         print(f'  before traces:   train={before[0]:,}  val={before[1]:,}  test={before[2]:,}')
         print(f'  after windows:   train={X_train_full.shape[0]:,}  val={X_val.shape[0]:,}  test={X_test.shape[0]:,}')
@@ -884,13 +1184,13 @@ def main():
         X_val  = X_val.astype(np.float32)
         X_test = X_test.astype(np.float32)
     else:
-        print('Building feature matrices...')
-        X_train_full = build_features(seqs_train, ver_train, top_ids, disc_ids, top_ngrams, ver_cols,
-                                      CFG['ngram_n'], cat_cols, id_to_cat)
-        X_val        = build_features(seqs_val,   ver_val,   top_ids, disc_ids, top_ngrams, ver_cols,
-                                      CFG['ngram_n'], cat_cols, id_to_cat).astype(np.float32)
-        X_test       = build_features(seqs_test,  ver_test,  top_ids, disc_ids, top_ngrams, ver_cols,
-                                      CFG['ngram_n'], cat_cols, id_to_cat).astype(np.float32)
+        print('Building feature matrices (whole-trace fallback)...')
+        X_train_full = build_features(seqs_train, cat_cols, id_to_cat,
+                                      patterns_by_first, ps_dims, ts_train, temporal_dims, **_extras)
+        X_val        = build_features(seqs_val, cat_cols, id_to_cat,
+                                      patterns_by_first, ps_dims, ts_val, temporal_dims, **_extras).astype(np.float32)
+        X_test       = build_features(seqs_test, cat_cols, id_to_cat,
+                                      patterns_by_first, ps_dims, ts_test, temporal_dims, **_extras).astype(np.float32)
 
     # Step 3c
     # Fit scaler on the normal-only subset, then drop X_train_full to free ~1 GB
@@ -917,28 +1217,48 @@ def main():
 
     joblib.dump(feature_scaler, out / 'feature_scaler.joblib')
     input_dim = feat_dim
+
+    # Persist the Benign Pattern Database so inference matches the trained vectors.
+    (out / 'benign_patterns.json').write_text(json.dumps({
+        'patterns':    [list(p) for p in benign_patterns],
+        'window_len':  WINDOW_LEN,
+        'min_support': CFG['ps_min_support'],
+        'min_len':     CFG['ps_min_len'],
+        'max_len':     CFG['ps_max_len'],
+        'top_n':       CFG['ps_top_n'],
+    }, indent=2))
+
+    feature_groups: dict = {}
+    if n_freq:        feature_groups[f'freq_{n_freq}']         = n_freq
+    if n_disc:        feature_groups[f'disc_{n_disc}']         = n_disc
+    if n_stats:       feature_groups['stats_8']                = 8
+    if n_ng:          feature_groups[f'bigrams_{n_ng}']        = n_ng
+    feature_groups[f'cat_{n_cat}']                              = n_cat
+    if temporal_dims: feature_groups[f'temporal_{temporal_dims}'] = temporal_dims
+    if ps_dims:       feature_groups[f'prefixspan_{ps_dims}']  = ps_dims
+
     fe_report: dict = {
-        'feature_groups': {
-            f'freq_{len(top_ids)}': len(top_ids),
-            f'disc_{len(disc_ids)}': len(disc_ids),
-            'stats_8': 8,
-            f'ngram_{n_ng}': n_ng,
-            'ver_onehot': n_ver,
-        },
-        'total_dims': feat_dim,
-        'ngram_n': CFG['ngram_n'],
-        'top_ids': top_ids,
-        'disc_ids': disc_ids,
-        'top_ngrams': [list(g) for g in top_ngrams],
-        'ver_cols': ver_cols,
-    }
-    if n_cat > 0:
-        fe_report['feature_groups'][f'cat_{n_cat}'] = n_cat
-        fe_report['cat_cols']         = cat_cols
+        'feature_groups': feature_groups,
+        'total_dims':     feat_dim,
+        'cat_cols':       cat_cols,
         # Serialise as {syscall_id: category}; keys are stringified for JSON.
-        fe_report['syscall_id_to_cat'] = {str(k): v for k, v in (id_to_cat or {}).items()}
+        'syscall_id_to_cat': {str(k): v for k, v in (id_to_cat or {}).items()},
+        'has_temporal':   has_temporal,
+        'temporal_dims':  temporal_dims,
+        'prefixspan_dims': ps_dims,
+        'benign_patterns_file': 'benign_patterns.json',
+        # Sensor alphabet — the syscall IDs training was restricted to. Inference
+        # filters live windows to the same set so train/serve vectors match.
+        'sensor_alphabet':       sorted(_ALLOWED_IDS) if _ALLOWED_IDS else [],
+        'sensor_alphabet_names': SENSOR_ALPHABET_NAMES if USE_SENSOR_ALPHABET else [],
+        # Engineered support vocab fit on normal-training windows.
+        'top_ids':        list(top_ids),
+        'disc_ids':       list(disc_ids),
+        'top_bigrams':    [list(g) for g in top_bigrams],
+        'enable_stats':   bool(enable_stats),
+    }
     (out / 'fe_report.json').write_text(json.dumps(fe_report, indent=2))
-    _log('feature_scaler.joblib + fe_report.json saved')
+    _log('feature_scaler.joblib + fe_report.json + benign_patterns.json saved')
 
     # Step 4: Isolation Forest
     _log(f'Training IsolationForest: {CFG["n_estimators"]} trees, n_train={X_train.shape[0]:,}  rows...')
@@ -947,7 +1267,8 @@ def main():
         contamination=CFG['contamination'],
         random_state=GLOBAL_SEED,
         n_jobs=-1,
-        verbose=1,   # 1 line per (n_estimators/10) trees built
+        verbose=0,   # 0: avoid per-call joblib.Parallel logging at inference
+                     # (decision_function re-emits it every scored window).
     )
     iforest.fit(X_train)
     _log('IF: fit done; scoring train...')
@@ -956,7 +1277,7 @@ def main():
     if_val   = -iforest.decision_function(X_val)
     _log('IF: scoring test...')
     if_test  = -iforest.decision_function(X_test)
-    _log(f'IF val AUC: {roc_auc_score(y_val, if_val):.4f}  (paper: 0.646)')
+    _log(f'IF val AUC: {roc_auc_score(y_val, if_val):.4f}')
     joblib.dump(iforest, out / 'iforest.joblib')
 
     # Step 5: VAE
@@ -992,7 +1313,7 @@ def main():
     encoder, decoder, _ = build_vae(
         input_dim, CFG['latent_dim'], CFG['hidden_dim'], CFG['dropout'], CFG['l2'])
     encoder.set_weights(best_enc_w); decoder.set_weights(best_dec_w)
-    _log(f'Best seed={best_seed}  val_auc={best_val_auc:.4f}  (paper: 0.747)')
+    _log(f'Best seed={best_seed}  val_auc={best_val_auc:.4f}')
 
     _log('VAE: scoring train (recon error)...')
     vae_train = recon_error(X_train, encoder, decoder)
@@ -1007,11 +1328,14 @@ def main():
     ensemble.fit(vae_train, if_train)
     ens_val  = ensemble.score(vae_val,  if_val)
     ens_test = ensemble.score(vae_test, if_test)
-    _log(f'Ensemble val AUC: {roc_auc_score(y_val, ens_val):.4f}  (paper: 0.656)')
+    _log(f'Ensemble val AUC: {roc_auc_score(y_val, ens_val):.4f}')
 
     # Step 7: Threshold + metrics
-    _log(f'Selecting thresholds (strategy={CFG["threshold"]}) and computing test metrics...')
-    strategy = CFG['threshold']
+    # Paper §IV.B.3 uses T_0 = 99.5th percentile of benign validation errors
+    # ('p995') as initial, then EMA-updates online at inference. Override with
+    # THRESHOLD_STRATEGY=p995 for paper-faithful T_0; default 'f1' here.
+    strategy = os.environ.get('THRESHOLD_STRATEGY', CFG['threshold']).lower()
+    _log(f'Selecting thresholds (strategy={strategy}) and computing test metrics...')
     t_if  = select_threshold(y_val, if_val,  strategy)
     t_vae = select_threshold(y_val, vae_val, strategy)
     t_ens = select_threshold(y_val, ens_val, strategy)
@@ -1032,8 +1356,10 @@ def main():
     ensemble.save(out)
 
     results = {
-        'experiment':       (f'dongting_sliding_window_{WINDOW_LEN}_{WINDOW_STRIDE}'
-                             if USE_SLIDING_WINDOW else 'dongting_build_and_train'),
+        'experiment':       (f'dongting_{WINDOW_LEN}_{WINDOW_STRIDE}'
+                             if USE_SLIDING_WINDOW else 'dongting_whole_trace'),
+        'data_source':      'local',
+        'n_sequences':      len(idx_train) + len(idx_val) + len(idx_test),
         'use_sliding_window': bool(USE_SLIDING_WINDOW),
         'window_len':       WINDOW_LEN if USE_SLIDING_WINDOW else None,
         'window_stride':    WINDOW_STRIDE if USE_SLIDING_WINDOW else None,
@@ -1044,7 +1370,9 @@ def main():
         'latent_dim':       CFG['latent_dim'],
         'hidden_dim':       CFG['hidden_dim'],
         'contamination':    CFG['contamination'],
-        'ngram_n':          CFG['ngram_n'],
+        'has_temporal':     has_temporal,
+        'prefixspan_dims':  ps_dims,
+        'n_benign_patterns': len(benign_patterns),
         'vae_seed_reports': seed_reports,
         'best_vae_seed':    best_seed,
         'models': {

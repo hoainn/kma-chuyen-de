@@ -1,0 +1,98 @@
+---
+# Single-purpose attack-simulator pod. Hosts pattern-only simulators
+# (NOT working exploits) for each CVE in the slide deck. Lives in ns demo
+# alongside the 6 benign workloads so Tetragon and the detector see it as
+# one more pod. Tear down with: kubectl delete pod attacker -n demo
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: attack-sims, namespace: demo }
+data:
+  # CVE-2022-0847 Dirty Pipe — syscall fingerprint: pipe2 / splice / openat / write / lseek
+  dirty_pipe.py: |
+    import os, time, sys
+    target = '/tmp/dirty-pipe-target'
+    with open(target, 'wb') as f: f.write(b'A' * 4096)
+    deadline = time.time() + float(sys.argv[1] if len(sys.argv)>1 else 60)
+    i = 0
+    while time.time() < deadline:
+        r, w = os.pipe()
+        os.write(w, b'X' * 4096)
+        try: os.splice(r, w, 4096)
+        except OSError: pass
+        os.close(r); os.close(w)
+        fd = os.open(target, os.O_RDWR)
+        os.lseek(fd, 0, 0); os.write(fd, b'P'); os.close(fd)
+        i += 1
+    print(f'dirty-pipe sim: {i} cycles', flush=True)
+
+  # CVE-2021-4034 PwnKit — syscall fingerprint: clone / execve with anomalous argv / wait4
+  pwnkit.py: |
+    import os, time, sys
+    deadline = time.time() + float(sys.argv[1] if len(sys.argv)>1 else 60)
+    i = 0
+    while time.time() < deadline:
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.execvpe('/bin/true', [], {'GIO_USE_VFS': './pwnkit-x', 'PATH': '/usr/bin:/bin'})
+            except Exception:
+                os._exit(1)
+        else:
+            os.waitpid(pid, 0)
+        i += 1
+    print(f'pwnkit sim: {i} cycles', flush=True)
+
+  # CVE-2019-5736 Docker/runc escape — syscall fingerprint: readlinkat /proc/self/exe
+  #   + openat /proc/self/exe + ptrace
+  docker_escape.py: |
+    import os, time, sys, ctypes
+    libc = ctypes.CDLL(None)
+    deadline = time.time() + float(sys.argv[1] if len(sys.argv)>1 else 60)
+    i = 0
+    while time.time() < deadline:
+        try: os.readlink('/proc/self/exe')
+        except Exception: pass
+        try:
+            fd = os.open('/proc/self/exe', os.O_RDONLY)
+            os.read(fd, 4096); os.close(fd)
+        except Exception: pass
+        try: libc.ptrace(16, 0, 0, 0)  # PTRACE_ATTACH
+        except Exception: pass
+        i += 1
+    print(f'docker-escape sim: {i} cycles', flush=True)
+
+  # Exploit chain — syscall fingerprint: unshare / setns / clone / wait4
+  exploit_chain.py: |
+    import os, time, sys, ctypes
+    libc = ctypes.CDLL('libc.so.6')
+    CLONE_NEWUSER, CLONE_NEWNS, CLONE_NEWPID = 0x10000000, 0x00020000, 0x20000000
+    deadline = time.time() + float(sys.argv[1] if len(sys.argv)>1 else 60)
+    i = 0
+    while time.time() < deadline:
+        libc.unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID)
+        libc.setns(-1, CLONE_NEWNS)
+        pid = os.fork()
+        if pid == 0: os._exit(0)
+        os.waitpid(pid, 0)
+        i += 1
+    print(f'exploit-chain sim: {i} cycles', flush=True)
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: attacker
+  namespace: demo
+  labels: { app: attacker }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: attacker
+    image: python:3.12-slim
+    command: ["sleep", "99999"]
+    volumeMounts: [{ name: sims, mountPath: /sim }]
+    resources:
+      requests: { cpu: "50m",  memory: "64Mi"  }
+      limits:   { cpu: "1",    memory: "256Mi" }
+  volumes:
+  - name: sims
+    configMap: { name: attack-sims }

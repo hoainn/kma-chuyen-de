@@ -92,6 +92,20 @@ ARTIFACTS_DIR_HOST=../model           # Host path to model artifacts
 Grafana: http://localhost:3000 (admin/admin)
 Prometheus: http://localhost:9090
 
+**Run inference with the live-calibrated threshold** (else the compose default
+`THRESHOLD=0` uses the conservative trained T_0=0.81):
+```bash
+cd DeSFAM/inference
+docker compose --env-file .env.uat up -d --build   # detector T_0=0.25, EMA_TMIN=0.20
+```
+
+**Tetragon logs in Grafana (Loki).** Loki runs in-cluster (ns `monitoring`,
+NodePort 31100); Promtail tails the Tetragon `export-stdout` event stream + ns
+demo pod logs and pushes to Loki; local Grafana adds it as the `Loki` datasource.
+Dashboard panels: "Tetragon syscall events — ns demo / all" and "ns demo — workload logs".
+LogQL selectors: `{namespace="kube-system", container="export-stdout"}` (events),
+`{namespace="demo"}` (workloads).
+
 ---
 
 ## Kubernetes / Tetragon
@@ -107,6 +121,10 @@ kubectl apply -f tetragon/tracing-policy.yaml
 
 # Deploy demo workloads (normal + attack)
 bash deploy.sh
+
+# Loki + Promtail (Tetragon-log → Grafana via NodePort 31100)
+kubectl apply -f loki/loki.yaml -f loki/promtail.yaml
+# Teardown Loki:  kubectl delete ns monitoring
 
 # Teardown
 bash teardown.sh
@@ -128,19 +146,52 @@ bash build.sh   # Requires Docker → outputs build/en/main_en.pdf
 
 ---
 
-## Feature Vector (149 dims)
+## Feature Vector (sensor-alphabet, §IV.B.3)
+
+Per sliding window (length 15, stride 3 — the canonical default):
 
 ```
-[ freq_60 | disc_40 | stats_8 | bigrams_40 | ver_1 ]
+[ freq_F | disc_D | stats_8 | cat_K | temporal_T? | prefixspan_P ]
 ```
 
-- `freq_60`: normalised frequency of top-60 syscalls by count
-- `disc_40`: binary presence of next-40 discriminative syscalls
-- `stats_8`: entropy, unique-count, log-length, max-freq, p75, std, coverage, raw-length/1000
-- `bigrams_40`: normalised bigram frequency
-- `ver_1`: one-hot kernel version (5.12 only in DongTing normal set → 1 column; paper uses 174 dims with 26 versions)
+**Sensor alphabet (the key alignment, 2026-05-30).** The live Tetragon policy
+`syscall-ad-tracing` emits only **23 security-relevant syscalls** (execve, clone,
+setuid/setgid/capset, openat, unlinkat, renameat2, mount, unshare, setns,
+pivot_root, socket, connect, bind, mprotect, mmap, prctl, memfd_create, splice,
+ptrace, init/finit_module, bpf — NO read/write/close/futex). `train.py`
+(`SENSOR_ALPHABET=1`, default) filters DongTing to exactly this set before
+windowing, so training and serving share one feature space. Without it, training
+on the full syscall universe makes every live window degenerate → benign ≈ attack
+(see `docs/auto-iter-log.md` iter-2). `load_syscall_table` also skips x32 ABI rows
+so `execve`/`ptrace` use the canonical IDs the live extractor uses.
 
-Scaling: `RobustScaler(quantile_range=(1.0, 99.0))` fit on **normal training sequences only**.
+- `freq_F` (F=8): per-window frequency of the common alphabet syscalls.
+- `disc_D` (D=15): **binary presence** of the rarer privileged syscalls
+  (ptrace/splice/unshare/setns/mount/bpf/…). Dilution-robust: a lone `ptrace` in a
+  15-`openat` window still flips the bit (plain frequency under-weights it).
+- `stats_8`: entropy / unique-count / length / max-freq / … derived from freq.
+- `cat_K` (K=10): normalised per-window frequency over functional syscall categories
+  (process, file, memory, network, signal, time, ipc, security, io_event, other) —
+  the paper's "Categorical Frequencies" behavioural signature.
+- `temporal_T` (T=3, **conditional**): Δt mean/std/max; activates only with per-syscall
+  timestamps. DongTing (`strace -v -f`) has none → T=0, `fe_report.json: has_temporal=false`.
+- `prefixspan_P` (P=2): `[matched-flag, longest-match/L]` from matching the window against a
+  PrefixSpan **Benign Pattern Database** mined on normal training windows (paper "Access List
+  Pattern Matching"). DB persisted as `benign_patterns.json`.
+
+DongTing default = **43 dims** (freq_8 + disc_15 + stats_8 + cat_10 + prefixspan_2).
+Scaling: `RobustScaler(quantile_range=(1.0, 99.0))` fit on **normal training windows only**.
+The vocab sizes are env-tunable (`TOP_K_FREQ/TOP_K_DISC/TOP_K_BIGRAMS/ENABLE_STATS`);
+`bigrams` are off (noisy on a 24-symbol alphabet). **Data Augmentation** remains a
+known gap (incompatible with normal-only IF/VAE).
+
+Result (sensor-alphabet model): VAE val AUC 0.944 (posterior collapse resolved),
+ensemble val 0.948, DongTing-test ensemble AUC 0.835 / F1 0.417. Live separation:
+benign mongodb ≤0.19, demo attacks 0.278–0.930. Live T_0=0.25 in `inference/.env.uat`.
+
+Data source: `train.py` reads the full DongTing release (`.log` files + `Baseline.xlsx`
+splits) under `DATA_ROOT`. `train.py` and `featurizer.py` (inference) must produce
+**bit-identical** vectors — guarded by `tests/test_feature_parity.py` (passing).
 
 ---
 
