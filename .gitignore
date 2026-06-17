@@ -16,3 +16,8 @@ DeSFAM/model_backups/
 # Claude Prism local app state (history repo + build artifacts)
 .claudeprism/
 .prism/
+
+# Full DongTing release (7GB, download separately)
+DongTing_Official/
+# Downloaded reference PDFs (copyright; keep manifest only)
+Docs/*.pdf

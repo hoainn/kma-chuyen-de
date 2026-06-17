@@ -1,0 +1,55 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}
+  body{width:980px;background:#fff;padding:26px}
+  h1{font-size:18px;color:#0f172a;text-align:center;margin-bottom:4px}
+  .sub{text-align:center;color:#64748b;font-size:13px;margin-bottom:16px}
+  table{border-collapse:collapse;width:100%}
+  th{background:#1e3a8a;color:#fff;font-size:14px;padding:10px 12px;text-align:left}
+  td{padding:11px 12px;font-size:13.5px;color:#1f2937;vertical-align:top;border-bottom:1px solid #e2e8f0}
+  tr:nth-child(even) td{background:#f8fafc}
+  .vec{font-weight:700;color:#0f172a;width:230px}
+  .sys code{display:inline-block;background:#eff4ff;border:1px solid #c7d7fe;color:#1d4ed8;
+            border-radius:5px;padding:1px 6px;margin:2px 3px 2px 0;font-size:12.5px;font-family:Menlo,Consolas,monospace}
+  .cve{width:250px}
+  .cve b{color:#b91c1c}
+  .foot{margin-top:12px;font-size:12px;color:#64748b;text-align:center}
+</style></head>
+<body>
+  <h1>Syscall đặc quyền &mdash; tín hiệu hành vi của leo thang đặc quyền</h1>
+  <div class="sub">Các syscall hiếm trong tải bình thường được biểu diễn bằng <b>bit hiện diện</b> (đặc trưng <code style="font-family:Menlo,monospace">disc</code>) &mdash; mỗi nhóm tương ứng một vector tấn công</div>
+  <table>
+    <tr><th>Nhóm hành vi leo thang đặc quyền</th><th>Syscall đặc quyền (đặc trưng disc)</th><th>Ví dụ CVE / kỹ thuật</th></tr>
+    <tr>
+      <td class="vec">Nâng định danh &amp; capability</td>
+      <td class="sys"><code>setuid</code><code>setgid</code><code>capset</code><code>prctl</code></td>
+      <td class="cve"><b>CVE-2021-4034</b> (PwnKit) &mdash; chiếm quyền root cục bộ</td>
+    </tr>
+    <tr>
+      <td class="vec">Phá vỡ cô lập namespace / thoát container</td>
+      <td class="sys"><code>unshare</code><code>setns</code><code>pivot_root</code><code>mount</code></td>
+      <td class="cve"><b>CVE-2019-5736</b> (runc) &mdash; ghi đè runtime, thoát container</td>
+    </tr>
+    <tr>
+      <td class="vec">Ghi đè dữ liệu chỉ-đọc</td>
+      <td class="sys"><code>splice</code></td>
+      <td class="cve"><b>CVE-2022-0847</b> (Dirty Pipe) &mdash; sửa file đặc quyền</td>
+    </tr>
+    <tr>
+      <td class="vec">Tiêm / điều khiển tiến trình khác</td>
+      <td class="sys"><code>ptrace</code></td>
+      <td class="cve">Process injection, đánh cắp phiên đặc quyền</td>
+    </tr>
+    <tr>
+      <td class="vec">Nạp mã vào nhân</td>
+      <td class="sys"><code>init_module</code><code>finit_module</code><code>bpf</code></td>
+      <td class="cve">Kernel rootkit, lạm dụng eBPF đọc/ghi nhân</td>
+    </tr>
+    <tr>
+      <td class="vec">Thực thi mã bất thường (fileless)</td>
+      <td class="sys"><code>memfd_create</code><code>execve</code></td>
+      <td class="cve">Spawn shell, chạy payload không chạm đĩa</td>
+    </tr>
+  </table>
+  <div class="foot">Một bit hiện diện bật khi syscall xuất hiện dù chỉ một lần trong cửa sổ &mdash; bền với pha loãng giữa nhiều syscall thông thường.</div>
+</body></html>

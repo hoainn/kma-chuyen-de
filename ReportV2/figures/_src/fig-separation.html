@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8">
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#fff; font-family:'Helvetica Neue', Arial, 'Segoe UI', sans-serif; }
+  #fig { width: 1180px; padding: 38px 46px 30px; background:#fff; }
+  .title { font-size:15px; font-weight:600; color:#14365c; margin-bottom:30px; }
+  .axis-wrap { position:relative; height: 210px; }
+  /* axis line */
+  .axis { position:absolute; left:0; right:0; bottom:64px; height:3px; background:#3a4a5c; }
+  .tick { position:absolute; bottom:52px; width:2px; height:14px; background:#7a8aa0; transform:translateX(-1px); }
+  .tlabel { position:absolute; bottom:30px; font-size:13px; color:#5b6b7d; transform:translateX(-50%);
+            font-family:'SF Mono',Consolas,monospace; }
+  /* bands sit above the axis */
+  .band { position:absolute; height:46px; bottom:67px; border-radius:8px; opacity:.92;
+          display:flex; align-items:center; justify-content:center; color:#fff; font-size:13.5px; font-weight:600; }
+  .benign { background:#3a9d5d; }
+  .attack { background:#c0392b; }
+  .blabel { position:absolute; bottom:120px; font-size:13.5px; font-weight:600; transform:translateX(-50%); }
+  .benign-l { color:#2f6f3e; }
+  .attack-l { color:#962c20; }
+  /* threshold */
+  .thr { position:absolute; bottom:60px; height:118px; border-left:3px dashed #b8860b; }
+  .thr-l { position:absolute; bottom:182px; font-size:13.5px; font-weight:700; color:#9a6f08;
+           transform:translateX(-50%); font-family:'SF Mono',Consolas,monospace; }
+  .legend { margin-top:18px; font-size:12.5px; color:#6b7888; font-style:italic; text-align:center; }
+</style></head>
+<body>
+<div id="fig">
+  <div class="title">Phân tách điểm bất thường khi phục vụ trực tiếp (Tetragon / Kubernetes)</div>
+  <div class="axis-wrap">
+    <!-- positions are % of axis width; 0.0 = 0%, 1.0 = 100% -->
+    <div class="blabel benign-l" style="left:9.5%">Lành tính (MongoDB)</div>
+    <div class="band benign"     style="left:0%;     width:19%">≤ 0.19</div>
+
+    <div class="thr"   style="left:25%"></div>
+    <div class="thr-l" style="left:25%">T₀ = 0.25</div>
+
+    <div class="blabel attack-l" style="left:60%">Kịch bản tấn công (ns demo)</div>
+    <div class="band attack"     style="left:27.8%; width:65.2%">0.278 – 0.930</div>
+
+    <div class="axis"></div>
+    <div class="tick" style="left:0%"></div>   <div class="tlabel" style="left:0%">0.0</div>
+    <div class="tick" style="left:25%"></div>  <div class="tlabel" style="left:25%">0.25</div>
+    <div class="tick" style="left:50%"></div>  <div class="tlabel" style="left:50%">0.5</div>
+    <div class="tick" style="left:75%"></div>  <div class="tlabel" style="left:75%">0.75</div>
+    <div class="tick" style="left:100%"></div> <div class="tlabel" style="left:100%">1.0</div>
+  </div>
+  <div class="legend">Khoảng trống giữa hai phân phối cho phép một ngưỡng vận hành duy nhất (T₀ = 0.25) tách sạch lành tính khỏi tấn công.</div>
+</div>
+</body></html>

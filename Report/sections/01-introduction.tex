@@ -39,7 +39,17 @@ quyền} cho môi trường multi-tenant Kubernetes dựa trên phân tích sysc
 trên nền các nghiên cứu liên quan---trọng tâm là công trình tham chiếu
 DeSFAM~\cite{desfam_original}. Đây là một báo cáo môn học theo hướng nghiên cứu
 chủ đề: hệ thống hóa cơ sở lý thuyết, thiết kế và hiện thực hóa cơ chế, rồi đánh
-giá thực nghiệm. Cụ thể, báo cáo:
+giá thực nghiệm.
+
+\paragraph{Trọng tâm: mô-đun SyscallAD.} Framework tham chiếu DeSFAM gồm
+\emph{ba} mô-đun (giai đoạn) tích hợp: (1) \emph{Lập danh sách truy cập syscall
+lai} và sinh hồ sơ seccomp; (2) \emph{SyscallAD}---giám sát thời gian thực và phát
+hiện bất thường syscall bằng tập hợp VAE\,+\,iForest; (3) \emph{Thực thi thích ứng}
+(chấm điểm rủi ro, ánh xạ MITRE ATT\&CK, chặn trong nhân bằng eBPF/LSM). Báo cáo
+này \textbf{đặt trọng tâm vào mô-đun SyscallAD} (Giai đoạn~2)---lõi phát hiện leo
+thang đặc quyền dựa trên hành vi syscall; hai mô-đun còn lại (Giai đoạn~1 và Giai
+đoạn~3) chỉ được \emph{điểm qua} để giữ tính trọn vẹn của bức tranh kiến trúc, chứ
+không phải đối tượng nghiên cứu chính. Cụ thể, báo cáo:
 \begin{enumerate}[label=(\roman*)]
   \item Xây dựng lõi phát hiện bất thường syscall (VAE + iForest, hợp nhất tập
         hợp) theo thiết kế tham chiếu SyscallAD của DeSFAM~\cite{desfam_original},

@@ -142,7 +142,9 @@ bash build.sh   # Requires Docker → outputs build/en/main_en.pdf
 **IMPORTANT — paper sections are read-only:**
 - `paper/src/sections_en/` is the canonical truth for all claims, figures, and table values.
 - **Never modify paper `.tex` files.** The notebook/code must match the paper, not the other way around.
-- Paper Table 1 target values: IF AUC=0.646, VAE AUC=0.747, Ensemble AUC=0.656; F1≈0.883, Recall≈0.984.
+- DeSFAM does **NOT** publish a per-model AUC/AP/F1 table for SyscallAD on DongTing — only aggregate headline (AUC≈0.94, F1≈0.92, precision≈94%, recall≈90%), itself internally inconsistent. Do NOT treat any per-model "published" AUC as a target.
+- The `0.646/0.747/0.656` values some old notes/logs call "paper numbers" are a **mislabelled earlier run**, not DeSFAM's — do not use them.
+- `paper/src/sections_en/05_evaluation.tex` Tab. `tab:dongting_reproduction` (IF 0.882 / VAE 0.960 / Ensemble 0.921) is **this project's own reproduction target**, not external published data.
 
 ---
 

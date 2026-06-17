@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#fff;font-family:'Helvetica Neue',Arial,'Segoe UI',sans-serif}
+  #fig{width:960px;padding:30px 40px 22px;background:#fff}
+  .title{font-size:17px;font-weight:700;color:#14365c}
+  .sub{font-size:13px;color:#5b6b7d;margin:4px 0 24px}
+  .chart{position:relative;height:360px;margin-left:50px;border-left:2px solid #9aa7b5;border-bottom:2px solid #9aa7b5}
+  .grid{position:absolute;left:0;right:0;border-top:1px dashed #e3e8ee}
+  .ax{position:absolute;left:-42px;font-size:12px;color:#6b7888;transform:translateY(-50%);width:36px;text-align:right}
+  .groups{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;justify-content:space-around;align-items:flex-end}
+  .group{position:relative;width:240px;display:flex;justify-content:center;align-items:flex-end;gap:18px}
+  .bar{width:54px;position:relative;border-radius:5px 5px 0 0}
+  .bar .v{position:absolute;top:-20px;left:-6px;right:-6px;text-align:center;font-size:12.5px;font-weight:700;color:#1f2d3d}
+  .if{background:#6b8fb5}.vae{background:#2f6db0}.ens{background:#d98a3d}
+  .glabel{position:absolute;bottom:-26px;width:100%;text-align:center;font-size:14px;font-weight:700;color:#25303d}
+  .legend{margin-top:60px;display:flex;gap:28px;justify-content:center;font-size:13px;color:#25303d}
+  .legend span{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:6px}
+  .cap{margin-top:12px;font-size:12px;color:#6b7888;text-align:center}
+</style></head>
+<body>
+<div id="fig">
+  <div class="title">Hiệu năng SyscallAD trên tập kiểm tra DongTing (mức cửa sổ)</div>
+  <div class="sub">AP cao đồng đều và AUC cao cho thấy khả năng xếp hạng tốt; F1 thấp là do ngưỡng ưu tiên precision</div>
+  <div class="chart">
+    <!-- 0..1 over 360px -->
+    <div class="grid" style="bottom:0"></div>     <div class="ax" style="bottom:0">0,0</div>
+    <div class="grid" style="bottom:90px"></div>  <div class="ax" style="bottom:90px">0,25</div>
+    <div class="grid" style="bottom:180px"></div> <div class="ax" style="bottom:180px">0,5</div>
+    <div class="grid" style="bottom:270px"></div> <div class="ax" style="bottom:270px">0,75</div>
+    <div class="ax" style="bottom:360px">1,0</div>
+    <div class="groups">
+      <div class="group">
+        <div class="bar if"  style="height:306px"><div class="v">0,851</div></div>
+        <div class="bar vae" style="height:264px"><div class="v">0,734</div></div>
+        <div class="bar ens" style="height:301px"><div class="v">0,835</div></div>
+        <div class="glabel">AUC</div>
+      </div>
+      <div class="group">
+        <div class="bar if"  style="height:357px"><div class="v">0,991</div></div>
+        <div class="bar vae" style="height:355px"><div class="v">0,985</div></div>
+        <div class="bar ens" style="height:356px"><div class="v">0,990</div></div>
+        <div class="glabel">AP</div>
+      </div>
+      <div class="group">
+        <div class="bar if"  style="height:171px"><div class="v">0,474</div></div>
+        <div class="bar vae" style="height:152px"><div class="v">0,421</div></div>
+        <div class="bar ens" style="height:150px"><div class="v">0,417</div></div>
+        <div class="glabel">F1</div>
+      </div>
+    </div>
+  </div>
+  <div class="legend">
+    <div><span class="if"></span>Isolation Forest</div>
+    <div><span class="vae"></span>VAE</div>
+    <div><span class="ens"></span>Tập hợp (VAE + iForest)</div>
+  </div>
+  <div class="cap">Precision của cả ba ≈ 0,999; recall thấp (0,26–0,31) tại ngưỡng p995 kéo F1 xuống.</div>
+</div>
+</body></html>

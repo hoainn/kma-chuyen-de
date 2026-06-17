@@ -1,0 +1,136 @@
+\section{Thiết lập thực nghiệm}
+\label{sec:setup}
+
+Mục này mô tả cách tái lập SyscallAD để \emph{chạy lại} thực nghiệm. Số liệu kết quả
+được báo cáo ở Mục~\ref{sec:results} \emph{chỉ} lấy từ lần chạy lại trên bộ dữ liệu
+DongTing đầy đủ (chưa phải số liệu trong mục này).
+
+\subsection{Nguyên tắc: mọi công cụ chạy bằng Docker}
+Để bảo đảm khả năng tái lập và không làm ``bẩn'' máy chủ, toàn bộ chuỗi công cụ
+(huấn luyện, đánh giá, biên dịch báo cáo) đều chạy trong container. Quy trình huấn
+luyện và đánh giá được đóng gói bằng \texttt{docker-compose} và điều phối bởi
+\texttt{Experiment/run\_experiment.sh}.
+
+\subsection{Huấn luyện ngoại tuyến SyscallAD}
+Một nguồn chân lý duy nhất là \texttt{train.py} (mọi hàm học máy, không vẽ đồ thị);
+sổ tay \texttt{train\_dongting.ipynb} nhập lại từ \texttt{train.py} và bổ sung đồ thị
++ bình luận. Hai chế độ luôn đồng bộ.
+
+\begin{lstlisting}[language=bash]
+cd DeSFAM/training
+# Chay nhanh, khong tuong tac:
+docker compose -f docker-compose.pipeline.yml run --rm train
+# Hoac tuong tac (Jupyter Lab :8888):
+docker compose -f docker-compose.pipeline.yml --profile interactive up jupyter
+\end{lstlisting}
+
+Đầu ra (lưu vào \texttt{../model/}): bộ chuẩn hóa đặc trưng, mô hình iForest, trọng
+số encoder/decoder VAE, các bộ chuẩn hóa điểm thành phần, tham số tập hợp
+($\alpha=0{,}7$), từ vựng đặc trưng (\texttt{fe\_report.json}) và các chỉ số.
+
+\subsection{Cấu hình thí nghiệm (khai báo trước)}
+Bảng~\ref{tab:config} là các \emph{siêu tham số đã chọn} (cố định trước khi chạy);
+các đại lượng phụ thuộc dữ liệu (số chuỗi, số cửa sổ mỗi tập) sẽ được điền từ lần
+chạy lại trên DongTing đầy đủ.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cấu hình thí nghiệm đã khai báo cho SyscallAD.}
+  \label{tab:config}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Tham số} & \textbf{Giá trị} \\
+    \midrule
+    Thí nghiệm & \texttt{dongting\_15\_3} \\
+    Cửa sổ trượt (độ dài, bước) & $(15,\ 3)$ \\
+    Số chiều đặc trưng & 43 \\
+    VAE \texttt{latent\_dim} / \texttt{hidden\_dim} & 8 / 32 \\
+    iForest \texttt{contamination} & 0{,}02 \\
+    Trọng số hợp nhất $\alpha$ & 0{,}7 \\
+    Bảng chữ cái syscall an ninh & 23 syscall an ninh (\texttt{SENSOR\_ALPHABET=1}) \\
+    Đặc trưng thời gian & không (\texttt{has\_temporal=false}) \\
+    Chiến lược ngưỡng & \texttt{p995} (phân vị 99,5 lỗi kiểm định lành tính) \\
+    \midrule
+    Số chuỗi DongTing (nạp được / công bố) & 18\,874 / 18\,966 \\
+    Số cửa sổ train (lành tính) / val / test & 90\,456 / 896\,581 / 687\,926 \\
+    Số mẫu lành tính (PrefixSpan) & 150 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Giao thức đánh giá và tiêu chí tái lập thành công}
+\label{subsec:protocol}
+Để tránh diễn giải tùy tiện sau khi có số liệu, báo cáo \emph{cố định trước} giao
+thức đánh giá:
+\begin{itemize}[leftmargin=1.6em]
+  \item \textbf{Đơn vị đánh giá:} mỗi \emph{cửa sổ trượt} $(15,3)$ là một mẫu. Nhãn
+        cửa sổ kế thừa nhãn chuỗi DongTing chứa nó. \emph{Cảnh báo phương pháp:} một
+        chuỗi tấn công chứa nhiều cửa sổ ``trông lành tính'' (không có syscall đặc
+        quyền nào) nhưng vẫn bị gán nhãn tấn công; điều này gây nhiễu nhãn và có thể
+        thổi phồng/làm lệch AUC/AP/F1. Do đó báo cáo \emph{đồng thời} báo cáo (a) chỉ
+        số mức \emph{cửa sổ} và (b) chỉ số mức \emph{chuỗi} (một chuỗi bị gắn cờ nếu
+        có cửa sổ vượt ngưỡng), và nêu tỉ lệ cửa sổ tấn công thực sự chứa syscall đặc
+        quyền.
+  \item \textbf{Phân chia dữ liệu:} dùng đúng phân chia
+        \texttt{DTDS-train}/\texttt{validation}/\texttt{test} của DongTing; huấn
+        luyện trên cửa sổ \emph{bình thường} của tập train, chọn ngưỡng trên tập
+        validation, báo cáo số trên tập test. Nêu rõ rằng việc chọn hạt giống VAE
+        theo AUC kiểm định \emph{có dùng nhãn tấn công của tập validation}; tập test
+        tuyệt đối không tham gia chọn mô hình/ngưỡng.
+  \item \textbf{Chỉ số:} AUC và Average Precision (AP)---đo khả năng \emph{xếp hạng}
+        bất thường, độc lập ngưỡng; F1/Precision/Recall---đo \emph{điểm chốt nhị
+        phân} tại ngưỡng đã chọn. Báo cáo kèm \emph{trung bình $\pm$ độ lệch chuẩn}
+        qua các hạt giống thay vì một điểm số đơn lẻ.
+  \item \textbf{Tiêu chí ``tái lập đạt'' (không neo theo số liệu công bố theo mô
+        hình---vì DeSFAM \emph{không} công bố bảng AUC/AP/F1 theo mô hình trên
+        DongTing):} coi là đạt nếu (a) bộ trích đặc trưng dùng khi huấn luyện và khi
+        suy luận sinh véc-tơ \emph{trùng khít} (kiểm thử ngang hàng đạt); (b) khả năng \emph{xếp
+        hạng} cao và ổn định (AUC/AP rõ rệt trên mức ngẫu nhiên, ổn định qua hạt
+        giống); (c) định hướng \emph{precision cao} (ít báo động giả) được giữ.
+        F1/recall phụ thuộc ngưỡng nên \emph{không} dùng làm tiêu chí đạt/không; mọi
+        đối chiếu với DeSFAM chỉ ở mức \emph{định tính} (Mục~\ref{sec:results}).
+  \item \textbf{Thí nghiệm phân định (bắt buộc):} để tách ``phát hiện bất thường theo
+        chuỗi'' khỏi ``chỉ phát hiện sự hiện diện của syscall đặc quyền'', báo cáo
+        chạy một \emph{ablation}: so AUC của mô hình đầy đủ với một bộ phân loại
+        \emph{chỉ dùng đặc trưng \texttt{disc}} (Mục~\ref{subsec:confound}). Nếu hai
+        bên gần nhau, kết luận phải lùi về ``phát hiện theo hiện diện là tái lập
+        được; mô hình học máy bổ sung biên [đo được]''.
+\end{itemize}
+
+\paragraph{Đối sánh mã syscall giữa hai lớp.} Trong DongTing, chuỗi lành tính lưu
+dưới dạng \emph{ID số}, còn chuỗi tấn công lưu dưới dạng \emph{tên} syscall. Báo cáo
+dùng \texttt{syscall\_64.tbl} (bỏ dòng ABI x32) để ánh xạ tên\,$\leftrightarrow$\,ID
+nhất quán và kiểm tra rằng cả 23 syscall trong bảng chữ cái khôi phục \emph{giống
+hệt} từ cả hai cách lưu---nếu lệch, các bit \texttt{disc} sẽ bật bất đối xứng giữa
+hai lớp và tạo/triệt tiêu độ phân tách một cách giả tạo.
+
+\paragraph{Trung thành với nguồn so với thích nghi.} Bảng~\ref{tab:fidelity} tách
+bạch phần tái lập \emph{đúng} công bố với phần \emph{thích nghi có lý do}, giúp diễn
+giải đúng chênh lệch số liệu ở Mục~\ref{sec:results}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Trung thành với DeSFAM so với thích nghi trong bản tái lập.}
+  \label{tab:fidelity}
+  \small
+  \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{4.6cm} l >{\raggedright\arraybackslash}X@{}}
+    \toprule
+    \textbf{Hạng mục} & \textbf{Trạng thái} & \textbf{Ghi chú} \\
+    \midrule
+    VAE+iForest, $\alpha=0{,}7$, cửa sổ $(15,3)$ & tái lập đúng & $\alpha$ \emph{kế thừa}, không tinh chỉnh lại \\
+    Huấn luyện một lớp (chỉ lành tính)           & tái lập đúng & \\
+    Đặc trưng thời gian ($\Delta t$)             & thích nghi (tắt) & DongTing không có dấu thời gian \\
+    Bảng chữ cái syscall                         & thích nghi (23 lời gọi) & tập syscall an ninh liên quan leo thang \\
+    Ngưỡng                                       & thích nghi (cố định) & dùng thay EMA để dễ đối chiếu \\
+    Mô-đun 1, 3                                  & ngoài phạm vi & không hiện thực hóa lại \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Dữ liệu tấn công và lành tính}
+Báo cáo đánh giá hoàn toàn \emph{ngoại tuyến} trên DongTing: chuỗi \emph{lành tính}
+đến từ bốn bộ kiểm thử hồi quy nhân Linux, chuỗi \emph{tấn công} từ các chương trình
+kích hoạt lỗi (syzkaller) trên 26 phiên bản nhân---các chuỗi này phản ánh các họ
+khai thác leo thang đặc quyền/thoát container (ví dụ CVE-2021-4034, CVE-2022-0847,
+CVE-2019-5736). Không có thành phần phục vụ trực tiếp; mọi số liệu lấy từ tập kiểm
+tra DongTing.

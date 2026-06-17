@@ -1285,6 +1285,12 @@ def main():
     seed_reports = []
     best_val_auc, best_enc_w, best_dec_w = -1.0, None, None
     best_seed = CFG['seeds'][0]
+    # Opt-in (MULTISEED_TEST_EVAL=1): evaluate EVERY seed's full ensemble on the
+    # test split so the report can show test-level seed variance (mean±SD), not
+    # just the best seed. Default off → pipeline behaviour unchanged.
+    multiseed_test = os.environ.get('MULTISEED_TEST_EVAL', '0') == '1'
+    ms_strategy = os.environ.get('THRESHOLD_STRATEGY', CFG['threshold']).lower()
+    seed_test_metrics = []
 
     for seed in CFG['seeds']:
         _log(f'  VAE seed={seed}: fitting on {X_train.shape[0]:,} rows...')
@@ -1305,6 +1311,18 @@ def main():
         _log(f'  seed={seed}  val_auc={val_auc:.4f}  best_val_loss={best_loss:.4f}  epochs={epochs_run}')
         seed_reports.append({'seed': seed, 'val_auc': val_auc,
                              'epochs': epochs_run, 'best_val_loss': best_loss})
+        if multiseed_test:
+            # Full ensemble (this seed's VAE + the shared iForest) on the test
+            # split; per-seed ensemble scaler fit on this seed's train scores.
+            vae_tr_s = recon_error(X_train, encoder, decoder)
+            vae_va_s = recon_error(X_val,   encoder, decoder)
+            vae_te_s = recon_error(X_test,  encoder, decoder)
+            es_s = EnsembleScorer(alpha=CFG['alpha']).fit(vae_tr_s, if_train)
+            t_s  = select_threshold(y_val, es_s.score(vae_va_s, if_val), ms_strategy)
+            m_s  = compute_metrics(y_test, es_s.score(vae_te_s, if_test), t_s)
+            m_s['seed'] = seed
+            seed_test_metrics.append(m_s)
+            _log(f'  seed={seed}  ensemble test AUC={m_s["auc_roc"]:.4f}')
         if val_auc > best_val_auc:
             best_val_auc = val_auc; best_seed = seed
             best_enc_w = encoder.get_weights(); best_dec_w = decoder.get_weights()
@@ -1381,6 +1399,14 @@ def main():
             'ensemble':         m_ens,
         },
     }
+    if multiseed_test and seed_test_metrics:
+        def _ms(key):
+            vals = [m[key] for m in seed_test_metrics]
+            return {'mean': float(np.mean(vals)), 'std': float(np.std(vals)),
+                    'values': [float(v) for v in vals]}
+        results['ensemble_seed_test_metrics'] = seed_test_metrics
+        results['ensemble_seed_test_summary'] = {
+            k: _ms(k) for k in ('auc_roc', 'ap', 'f1', 'precision', 'recall_tpr')}
     (out / 'results.json').write_text(json.dumps(results, indent=2))
 
     print(f'\nArtifacts in {OUTPUT_DIR}:')

@@ -1,9 +1,9 @@
 %==============================================================================
-% Báo cáo Chuyên đề — An toàn Thông tin (KMA)
-% "Nghiên cứu cơ chế phát hiện tấn công leo thang đặc quyền trong môi trường
-%  Multi-tenant Kubernetes dựa trên phân tích System Calls"
-%  (DeSFAM được dùng làm công trình tham chiếu cho thiết kế lõi phát hiện)
-% Học viên: Nguyễn Ngọc Hoài — CHAT4P006
+% Báo cáo Chuyên đề — An toàn Thông tin (KMA) — PHIÊN BẢN 2
+% "Phát hiện tấn công leo thang đặc quyền trong Kubernetes dựa trên lời gọi
+%  hệ thống — Nghiên cứu mô-đun phát hiện bất thường SyscallAD của DeSFAM"
+%  (Trọng tâm: mô-đun SyscallAD/SysAD; hai mô-đun còn lại chỉ điểm qua)
+%  Học viên: Nguyễn Ngọc Hoài — CHAT4P006
 %
 % Định dạng: báo cáo học thuật một cột, tiếng Việt.
 % Biên dịch: XeLaTeX (qua Docker) — chạy ./build.sh
@@ -13,6 +13,9 @@
 % --- Lề trang ----------------------------------------------------------------
 \usepackage[margin=2.5cm]{geometry}
 \setlength{\parskip}{0.4em}
+% Cho phép giãn dòng khi cần để tránh tràn lề ở văn bản tiếng Việt (không có mẫu ngắt từ).
+\setlength{\emergencystretch}{3em}
+\hbadness=10000
 
 % --- Phông chữ Unicode (XeLaTeX): Latin Modern hỗ trợ dấu tiếng Việt ----------
 \usepackage{fontspec}
@@ -30,11 +33,13 @@
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{array}
+\usepackage{tabularx}
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
 \usepackage{url}
 \usepackage{listings}
 \usepackage{enumitem}
+\usepackage[ruled,vlined]{algorithm2e}
 
 % --- Nhãn tiếng Việt ---------------------------------------------------------
 \renewcommand{\abstractname}{Tóm tắt}
@@ -58,6 +63,9 @@
   showstringspaces=false,
 }
 
+% --- Hộp đánh dấu nội dung sẽ điền sau khi chạy lại thực nghiệm ---------------
+\newcommand{\TODOexp}[1]{{\color{red}\textbf{[CHỜ THỰC NGHIỆM]}~#1}}
+
 \begin{document}
 
 %==============================================================================
@@ -73,9 +81,10 @@
 {\large An toàn Thông tin}\\[2.4cm]
 
 {\large\itshape Đề tài}\\[10pt]
-{\LARGE\bfseries Nghiên cứu cơ chế phát hiện tấn công leo thang\\[4pt]
-đặc quyền trong môi trường Multi-tenant Kubernetes\\[4pt]
-dựa trên phân tích System Calls}\\[2.6cm]
+{\LARGE\bfseries Phát hiện tấn công leo thang đặc quyền\\[4pt]
+trong Kubernetes dựa trên lời gọi hệ thống\\[10pt]}
+{\large\itshape Nghiên cứu mô-đun phát hiện bất thường SyscallAD\\[2pt]
+của framework DeSFAM}\\[2.4cm]
 
 \begin{tabular}{rl}
   \textbf{Giảng viên hướng dẫn} & : TS. Vũ Thị Vân\\[5pt]
@@ -96,9 +105,9 @@ dựa trên phân tích System Calls}\\[2.6cm]
 \input{sections/abstract}
 \end{abstract}
 
-\noindent\textbf{Từ khóa:} leo thang đặc quyền, multi-tenant Kubernetes, bảo mật
-container, lời gọi hệ thống, eBPF, Tetragon, phát hiện bất thường, Bộ mã hóa biến
-phân tự động (VAE), Rừng cô lập, DongTing, DeSFAM.
+\noindent\textbf{Từ khóa:} leo thang đặc quyền, bảo mật container, Kubernetes, lời
+gọi hệ thống, phát hiện bất thường, SyscallAD, DeSFAM, Bộ mã hóa biến phân (VAE),
+Rừng cô lập (iForest), eBPF, Tetragon, DongTing.
 
 \clearpage
 \tableofcontents
@@ -109,18 +118,20 @@ phân tự động (VAE), Rừng cô lập, DongTing, DeSFAM.
 
 \pagenumbering{arabic}
 
-\input{sections/01-introduction}
-\input{sections/02-related-work}
-\input{sections/03-methodology}
-\input{sections/04-experiment-setup}
-\input{sections/05-evaluation}
-\input{sections/06-discussion}
-\input{sections/07-conclusion}
+\input{sections/01-mo-dau}
+\input{sections/02-co-so-ly-thuyet}
+\input{sections/03-tong-quan-desfam}
+\input{sections/04-syscallad}
+\input{sections/05-syscallad-leo-thang}
+\input{sections/06-thuc-nghiem-thiet-lap}
+\input{sections/07-ket-qua}
+\input{sections/08-thao-luan}
+\input{sections/09-ket-luan}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
 \appendix
-\input{sections/08-appendix-repro}
+\input{sections/10-phu-luc}
 
 \end{document}
