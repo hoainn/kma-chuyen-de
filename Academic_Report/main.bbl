@@ -1,0 +1,110 @@
+\begin{thebibliography}{10}
+
+\bibitem{bridges2019hostdata}
+Robert~A. Bridges, Tarrah~R. Glass-Vanderlan, Michael~D. Iannacone, Maria~S.
+  Vincent, and Qian Chen.
+\newblock A survey of intrusion detection systems leveraging host data.
+\newblock {\em ACM Computing Surveys}, 52(6):1--35, 2019.
+
+\bibitem{creech2014semantic}
+G.~Creech and J.~Hu.
+\newblock A semantic approach to host-based intrusion detection systems using
+  contiguous and discontiguous system call patterns.
+\newblock {\em IEEE Transactions on Computers}, 63(4):807--819, 2014.
+
+\bibitem{dongting2023}
+Guoyun Duan, Yuanzhi Fu, Minjie Cai, Hao Chen, and Jianhua Sun.
+\newblock {DongTing}: A large-scale dataset for anomaly detection of the
+  {Linux} kernel.
+\newblock {\em Journal of Systems and Software}, 203:111745, 2023.
+
+\bibitem{edgarmanz2017}
+Thomas~W. Edgar and David~O. Manz.
+\newblock {\em Research Methods for Cyber Security}.
+\newblock Syngress, 2017.
+
+\bibitem{forrest1996sense}
+S.~Forrest, S.~A. Hofmeyr, A.~Somayaji, and T.~A. Longstaff.
+\newblock A sense of self for {Unix} processes.
+\newblock In {\em Proc. IEEE Symposium on Security and Privacy}, pages
+  120--128, 1996.
+
+\bibitem{ebpfpatrol2025}
+Sangam Ghimire, Nirjal Bhurtel, Roshan Sahani, and Sudan Jha.
+\newblock {eBPF-PATROL}: Protective agent for threat recognition and overreach
+  limitation using {eBPF} in containerized and virtualized environments.
+\newblock arXiv:2511.18155, 2025.
+
+\bibitem{lighthids2025}
+Onat Gungor, Ishaan Kale, Jiasheng Zhou, and Tajana Rosing.
+\newblock {LIGHT-HIDS}: A lightweight and effective machine learning-based
+  framework for robust host intrusion detection.
+\newblock In {\em Proc. 24th IEEE Int. Conf. on Machine Learning and
+  Applications (ICMLA)}, 2025.
+\newblock arXiv:2509.13464.
+
+\bibitem{crosscontainer2023}
+Yi~He, Roland Guo, Yunlong Xing, Xijia Che, Kun Sun, Zhuotao Liu, Ke~Xu, and
+  Qi~Li.
+\newblock Cross container attacks: The bewildered {eBPF} on clouds.
+\newblock In {\em Proc. 32nd USENIX Security Symposium}, pages 5971--5988,
+  2023.
+
+\bibitem{hu2026eids}
+Xiaokang Hu, Zhichao Hua, Naixuan Guan, Yun Xu, Yibin Shen, Yang Yu, Zeyu Mi,
+  Yubin Xia, Ming Wang, and Jiesheng Wu.
+\newblock {EIDS}: A cloud intrusion detection system with high performance and
+  maintainability.
+\newblock {\em ACM Transactions on Computer Systems}, 2026.
+
+\bibitem{translmidssurvey}
+Hamza Kheddar.
+\newblock Transformers and large language models for efficient intrusion
+  detection systems: A comprehensive survey.
+\newblock {\em Information Fusion}, 2025.
+
+\bibitem{kotenko2025containerae}
+Igor Kotenko and Maxim Melnik.
+\newblock Anomaly detection in containerized systems based on system call
+  histograms and autoencoder neural network.
+\newblock In {\em Proc. IEEE 26th Int. Conf. of Young Professionals in Electron
+  Devices and Materials (EDM)}, 2025.
+
+\bibitem{safebpf2024}
+Soo~Yee Lim, Xueyuan Han, and Thomas Pasquier.
+\newblock {SafeBPF}: Hardware-assisted defense-in-depth for {eBPF} kernel
+  extensions.
+\newblock ACM Cloud Computing Security Workshop (CCSW), 2024.
+
+\bibitem{ebpfguard2026}
+X.~Lin, Z.~Chen, W.~Yang, et~al.
+\newblock {eBPF-Guard}: a detection method for container escape via multi-level
+  monitoring and enhanced analysis model.
+\newblock {\em Empirical Software Engineering}, 31:51, 2026.
+
+\bibitem{liu2018hids}
+Ming Liu, Zhi Xue, Xianghua Xu, Changmin Zhong, and Jinjun Chen.
+\newblock Host-based intrusion detection system with system calls: Review and
+  future trends.
+\newblock {\em ACM Computing Surveys}, 51(5):1--36, 2018.
+
+\bibitem{syairozi2025ebpfcompare}
+Aldien~Asy Syairozi and Arizal.
+\newblock Comparative analysis of {eBPF}-based runtime security monitoring
+  tools in monitoring and threat detection on {Kubernetes}.
+\newblock In {\em Proc. 1st Int. Conf. on Research and Innovations in
+  Information and Engineering Technology (RITECH)}, pages 136--141, 2025.
+
+\bibitem{desfam_original}
+S.~Zehra, H.~J. Syed, F.~Samad, and U.~Faseeha.
+\newblock {DeSFAM}: An adaptive {eBPF} and {AI}-driven framework for securing
+  cloud containers in real time.
+\newblock {\em IEEE Access}, 13, 2025.
+
+\bibitem{fedmon2025}
+Sehar Zehra, Hassan~Jamil Syed, and Ummay Faseeha.
+\newblock {FedMon}: Federated {eBPF} monitoring for distributed anomaly
+  detection in multi-cluster cloud environments.
+\newblock arXiv:2510.10126, 2025.
+
+\end{thebibliography}

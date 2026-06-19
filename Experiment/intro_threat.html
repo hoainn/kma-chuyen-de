@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#d{width:1080px;padding:28px 32px 22px;background:#fff;
+  font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:20px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 16px}
+.node{border:2px solid #4a5a6d;border-radius:14px;background:#f6f8fb;padding:14px 16px 16px}
+.node .nt{font-size:11px;font-weight:700;letter-spacing:.5px;color:#4a5a6d;text-align:center;margin-bottom:10px}
+.pods{display:flex;gap:18px;justify-content:center}
+.pod{flex:1;border-radius:10px;padding:10px 12px;border:1.6px solid;text-align:center}
+.pod .pt{font-weight:700;font-size:13px}.pod .pd{font-size:11px;color:#3c4a5a;margin-top:2px;line-height:1.35}
+.victim{background:#fae9ea;border-color:#cf6470}
+.adv{background:#fdf0e0;border-color:#dd9a48}
+.benign{background:#e8f5ea;border-color:#5aa46a}
+.arrows{display:flex;gap:18px;justify-content:center;margin:7px 0 4px}
+.acol{flex:1;text-align:center;font-size:10.5px;line-height:1.25}
+.red{color:#c0392b;font-weight:700}.org{color:#b8761b;font-weight:700}.gns{color:#5b6b7d}
+.bound{border:1.5px dashed #8a93a0;border-radius:8px;background:#eef1f5;text-align:center;
+  font-size:11px;color:#48566a;padding:6px;margin:4px 0}
+.kernel{border:2px solid #2b3a4d;border-radius:10px;background:#10243f;color:#e8eef7;text-align:center;
+  padding:11px;font-weight:700;font-size:14px;margin-top:4px}
+.kernel small{display:block;font-weight:400;font-size:11px;color:#aebfd4;margin-top:2px}
+.lat{text-align:center;font-size:10.5px;color:#c0392b;font-weight:700;margin:6px 0 0}
+.note{margin-top:14px;text-align:center;font-size:11.5px;color:#566;font-style:italic}
+code{font-family:"SF Mono",Menlo,monospace;font-size:11px;background:#e7ecf2;padding:1px 4px;border-radius:4px}
+</style></head><body>
+<div id="d">
+  <h1>Multi-tenant Kubernetes: the shared-kernel attack surface</h1>
+  <div class="sub">Containers on one node share the same Linux kernel — a thin isolation boundary that privilege escalation / container escape can cross</div>
+
+  <div class="node">
+    <div class="nt">KUBERNETES NODE</div>
+    <div class="pods">
+      <div class="pod victim"><div class="pt">Tenant A — victim pod</div>
+        <div class="pd">attacker foothold<br>(post-exploitation)</div></div>
+      <div class="pod adv"><div class="pt">Tenant B — noisy neighbor</div>
+        <div class="pd">adversarial co-tenant<br>pumps benign load</div></div>
+      <div class="pod benign"><div class="pt">Tenant C — benign</div>
+        <div class="pd">normal workload</div></div>
+    </div>
+
+    <div class="lat">◀ — — cross-tenant lateral movement / node takeover — — ▶</div>
+
+    <div class="arrows">
+      <div class="acol"><span class="red">▼ privilege escalation<br>/ container escape</span><br><span class="gns">(system calls)</span></div>
+      <div class="acol"><span class="org">▼ benign load = noise</span><br><span class="gns">(system calls)</span></div>
+      <div class="acol"><span class="gns">▼ normal activity<br>(system calls)</span></div>
+    </div>
+
+    <div class="bound">Isolation boundary: namespace · cgroup · capability · seccomp</div>
+    <div class="kernel">Shared Linux kernel
+      <small>every process ↔ kernel interaction is a system call</small></div>
+  </div>
+
+  <div class="note">All tenants funnel through one kernel via <b>system calls</b> → the detection signal exploited in Ch. 2. A compromise in Tenant A may escalate/escape; Tenant B can adversarially raise kernel-wide noise (studied in Ch. 4–5).</div>
+</div>
+</body></html>

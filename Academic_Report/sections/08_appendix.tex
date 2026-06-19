@@ -1,0 +1,17 @@
+%% ===================== PHỤ LỤC =====================
+\appendix
+\section{Phụ lục — Tái lập kết quả}\label{sec:repro}
+Mã nguồn tại \texttt{Experiment/}. VAE (TensorFlow/Keras) được huấn luyện trong Docker; thí nghiệm EMA chạy trên CPU trong vài phút:
+\begin{verbatim}
+cd Experiment && unzip -o ../DongTing_Official/npz.zip -d data/
+# 1) detector VAE (TensorFlow/Keras) trong Docker -> scored_windows_vae.npz
+docker run --rm -v "$PWD/..":/work -w /work/Experiment \
+    training-train python vae_keras.py
+# 2) thí nghiệm EMA (host venv: numpy/sklearn/scipy/pandas/matplotlib)
+SCORED_NPZ=output/scored_windows_vae.npz OUT_SUFFIX=_vae \
+    .venv/bin/python ema_evasion.py    # -> stats_vae.json, fig1/fig2_*_vae.png
+# 3) ablation không filter (top-20 freq) -> AUC ~0.50
+docker run --rm -v "$PWD/..":/work -w /work/Experiment \
+    -e FILTER=0 training-train python vae_keras.py
+\end{verbatim}
+Tham số chốt: sliding window $10$/bước $2$; alphabet $24$ system call; feature $42$ chiều; ensemble $\alpha=0{,}7$; EMA $\beta=0{,}9$; $T_{op}$ = phân vị $95$, $T_{\min}$ = phân vị $50$ của anomaly score lành tính; $40$ trial/ô. Kết quả số lưu tại \texttt{output/\{detector\_report.json, stats.json, trials.csv, summary.csv\}}.

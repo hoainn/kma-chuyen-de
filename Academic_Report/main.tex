@@ -1,0 +1,80 @@
+%% KMA — Báo cáo môn PP NCKH trong ATTT (Lớp CHAT4P). Định dạng BÁO CÁO HỌC THUẬT (một cột).
+%% Biên dịch bằng Tectonic/XeLaTeX (claude-prism). Tiếng Việt qua fontspec (Latin Modern phủ dấu).
+%% Cấu trúc: phần thân được tách theo chương trong thư mục sections/ và \input ở dưới.
+\documentclass[12pt,a4paper]{article}
+
+\usepackage{fontspec}
+\usepackage[a4paper,margin=2.6cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[table]{xcolor}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcommand{\yes}{\textcolor{green!55!black}{\checkmark}}
+\newcommand{\no}{\textcolor{red!72!black}{\ensuremath{\times}}}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+
+\onehalfspacing
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parskip}{4pt}
+\renewcommand{\abstractname}{Tóm tắt}
+
+\begin{document}
+
+%% ===================== TRANG BÌA =====================
+\begin{titlepage}
+\centering
+{\large BAN CƠ YẾU CHÍNH PHỦ\par}
+{\large HỌC VIỆN KỸ THUẬT MẬT MÃ\par}
+\vspace{0.4cm}
+\vfill
+{\Large\bfseries BÁO CÁO NGHIÊN CỨU\par}
+\vspace{0.6cm}
+{\huge\bfseries Nghiên cứu cơ chế phát hiện tấn công leo thang đặc quyền trong môi trường Multi-tenant Kubernetes dựa trên phân tích System Calls\par}
+\vspace{0.6cm}
+\vfill
+\begin{flushright}
+\begin{tabular}{@{}ll@{}}
+\textbf{Học viên:} & Nguyễn Ngọc Hoài — CHAT4P006 \\
+\textbf{GVHD:} & TS. Vũ Thị Vân \\
+\end{tabular}
+\end{flushright}
+\vspace{0.5cm}
+{\large Năm 2026\par}
+\end{titlepage}
+
+%% ===================== TÓM TẮT =====================
+\begin{abstract}
+\noindent Trong môi trường Kubernetes đa người thuê (multi-tenant), nhiều người thuê cùng chia sẻ một nhân (kernel) trên cùng một nút; do đó các tấn công leo thang đặc quyền và thoát khỏi container trở thành rủi ro trọng yếu. Các khung phát hiện bất thường dựa trên lời gọi hệ thống (system call) thu thập qua eBPF — tiêu biểu là DeSFAM — kết hợp bộ tự mã hoá biến phân (VAE) và rừng cô lập (Isolation Forest), đồng thời dùng ngưỡng động cập nhật theo trung bình trượt luỹ thừa (EMA) nhằm giảm báo động giả do hành vi lành tính trôi dạt theo thời gian. Báo cáo vận dụng phương pháp thực nghiệm ứng dụng để: (i) tái lập bộ phát hiện DeSFAM (VAE + Isolation Forest) trên tập dữ liệu thực DongTing; và (ii) kiểm định một giả thuyết đối kháng: nếu ngưỡng EMA được cập nhật \textit{vô điều kiện} — cách đọc theo nghĩa đen công thức EMA của DeSFAM — thì một ``hàng xóm gây nhiễu'' (tenant lân cận) bơm tải lành tính có thể đẩy ngưỡng toàn cục lên cao, giúp một tấn công lén lút né tránh phát hiện. Bộ phát hiện tái lập đạt AUC $=0{,}832$ (xấp xỉ DeSFAM). Phát hiện chính: khi hàng xóm gây nhiễu hoạt động mạnh, ngưỡng EMA bị đẩy lên cao đến mức để \textit{$74{,}2\%$ hoạt động của một tấn công lén lút lọt qua}, trong khi một ngưỡng cố định vẫn phát hiện được toàn bộ; nhiễu càng mạnh thì tỷ lệ bỏ sót càng cao. Đáng chú ý, với tấn công \textit{loud} (điểm bất thường rất cao), ngưỡng EMA tự bị đẩy lên \textit{ngay cả khi không có} hàng xóm gây nhiễu — do chính các cửa sổ tấn công bơm ngưỡng — cho thấy lỗ hổng còn nằm ở \textit{chính quy tắc cập nhật ngưỡng}, không chỉ ở môi trường đa người thuê. Ngược lại, dạng cập nhật \textit{có điều kiện} mà chính Algorithm 2 của DeSFAM đặc tả (chỉ cập nhật ngưỡng trên cửa sổ \textit{không} bị báo động) miễn nhiễm hoàn toàn ($0\%$). Đây là một nghiên cứu cơ chế trên điểm bất thường của DongTing; việc kiểm chứng trực tuyến trên cụm Kubernetes với Tetragon và tấn công leo thang đặc quyền thực là hướng phát triển tiếp theo. Báo cáo qua đó vạch ra một \textit{sự thiếu nhất quán} trong đặc tả của DeSFAM — công thức EMA (vô điều kiện) so với Algorithm 2 (có điều kiện) — và chứng minh rằng quy tắc cập nhật có điều kiện của Algorithm 2 là \textit{thiết yếu về an ninh}, chứ không chỉ để giảm báo động giả.
+
+\medskip
+\noindent\textbf{Từ khoá:} phát hiện xâm nhập, lời gọi hệ thống, eBPF, Kubernetes, leo thang đặc quyền, phát hiện bất thường, ngưỡng thích nghi, né tránh đối kháng.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+%% ===================== PHẦN THÂN (tách theo chương) =====================
+\input{sections/01_introduction}
+\input{sections/02_related}
+\input{sections/03_method}
+\input{sections/04_setup}
+\input{sections/05_results}
+\input{sections/06_discussion}
+\input{sections/07_conclusion}
+
+%% ===================== TÀI LIỆU THAM KHẢO =====================
+\bibliographystyle{plain}
+\bibliography{references}
+
+%% ===================== PHỤ LỤC =====================
+\input{sections/08_appendix}
+
+\end{document}

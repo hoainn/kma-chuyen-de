@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#fe{width:1180px;padding:28px 32px 24px;background:#fff;
+   font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:20px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 16px}
+.step{border:1.6px solid #aebccd;border-radius:11px;background:#eef2f7;padding:11px 14px;margin:0 auto;width:980px}
+.step .tag{font-size:10.5px;font-weight:700;letter-spacing:.4px;color:#566}
+.seq{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12px;margin-top:5px;line-height:1.7}
+.tok{display:inline-block;padding:1px 6px;margin:2px 2px;border-radius:5px;background:#dfe6ee}
+.drop{background:#f6dada;color:#9a3b3b;text-decoration:line-through}
+.keep{background:#d8ecdc;color:#1f6b34;font-weight:600}
+.win{background:#e7defb;color:#4b2c84;font-weight:600}
+.arrow{text-align:center;color:#7a8aa0;font-size:18px;margin:6px 0}
+.lbl{text-align:center;font-size:11.5px;color:#566;margin:2px 0}
+.lbl b{color:#2b3a4d}
+.cols{display:flex;gap:14px;justify-content:center;margin:0 auto;width:980px}
+.fcol{flex:1;border-radius:10px;padding:9px 11px;border:1.5px solid}
+.fa{background:#eaf2ff;border-color:#8fb2e0}.fb{background:#fff1e0;border-color:#dDa860}.fc{background:#eef7ee;border-color:#7bbf87}
+.fcol .h{font-weight:700;font-size:12.5px}.fcol .m{font-size:11px;color:#3c4a5a;margin-top:3px;line-height:1.45}
+.kv{font-family:"SF Mono",Menlo,monospace;font-size:10.5px;color:#27405e;margin-top:4px}
+.vec{text-align:center;font-family:"SF Mono",Menlo,monospace;font-size:11.5px;background:#10243f;color:#dfe9f5;
+     border-radius:8px;padding:7px 10px;margin:8px auto 0;width:760px}
+.dim{color:#ffd479;font-weight:700}
+.note{font-size:11px;color:#566;text-align:center;margin-top:5px}
+code{font-family:"SF Mono",Menlo,monospace;font-size:11px;background:#e7ecf2;padding:1px 4px;border-radius:4px}
+</style></head><body>
+<div id="fe">
+  <h1>Feature engineering: raw system call sequence → 42-dim vector</h1>
+  <div class="sub">Per sliding window → numeric features for the VAE + Isolation Forest ensemble (DeSFAM SyscallAD)</div>
+
+  <div class="step"><span class="tag">S1 · RAW SYSTEM CALL SEQUENCE (per process, ID-encoded)</span>
+    <div class="seq">
+      <span class="tok drop">read</span><span class="tok drop">write</span><span class="tok keep">execve</span>
+      <span class="tok keep">openat</span><span class="tok drop">read</span><span class="tok keep">ptrace</span>
+      <span class="tok keep">clone</span><span class="tok drop">futex</span><span class="tok keep">mmap</span>
+      <span class="tok keep">openat</span><span class="tok drop">close</span><span class="tok keep">openat</span> …
+    </div></div>
+  <div class="arrow">▼</div>
+  <div class="lbl"><b>S2 · Sensor-alphabet filter</b> — keep 24 security syscalls (execve, clone, setuid/setgid/capset, openat, ptrace, unshare, setns, mount, bpf…); <b>drop</b> read/write/close/futex…</div>
+  <div class="step"><span class="tag">S2 · FILTERED SEQUENCE (alphabet syscalls only)</span>
+    <div class="seq">
+      <span class="tok keep">execve</span><span class="tok keep">openat</span><span class="tok keep">ptrace</span>
+      <span class="tok keep">clone</span><span class="tok keep">mmap</span><span class="tok keep">openat</span>
+      <span class="tok keep">openat</span><span class="tok keep">execve</span><span class="tok keep">mmap</span>
+      <span class="tok keep">openat</span> …
+    </div></div>
+  <div class="arrow">▼</div>
+  <div class="lbl"><b>S3 · Sliding window</b> — length <code>L = 10</code>, <code>stride = 2</code> (sequence &lt; L → one short window)</div>
+  <div class="step" style="width:640px;background:#f1ecfb;border-color:#9b73c4"><span class="tag">S3 · ONE WINDOW W (10 syscalls)</span>
+    <div class="seq" style="text-align:center">
+      <span class="tok win">openat</span><span class="tok win">openat</span><span class="tok win">execve</span>
+      <span class="tok win">clone</span><span class="tok win">mmap</span><span class="tok win">openat</span>
+      <span class="tok win">ptrace</span><span class="tok win">mmap</span><span class="tok win">execve</span>
+      <span class="tok win">openat</span>
+    </div></div>
+  <div class="arrow">▼ &nbsp; extract 42 features</div>
+
+  <div class="cols">
+    <div class="fcol fa"><div class="h">freq · 24 dims</div>
+      <div class="m">Normalized frequency of each alphabet syscall: <code>c_s / L</code></div>
+      <div class="kv">openat .40 · execve .20 · mmap .20<br>clone .10 · ptrace .10 · (… = 0)</div></div>
+    <div class="fcol fb"><div class="h">disc · 15 dims</div>
+      <div class="m"><b>Binary presence</b> of 15 rare privileged syscalls (dilution-robust)</div>
+      <div class="kv">ptrace <b>1</b> · setuid 0 · capset 0<br>unshare 0 · mount 0 · bpf 0 …</div></div>
+    <div class="fcol fc"><div class="h">stats · 3 dims</div>
+      <div class="m">entropy H · #unique/24 · max-freq</div>
+      <div class="kv">H = 2.12 bit<br>unique = 5/24 = .21 · max = .40</div></div>
+  </div>
+  <div class="vec">42-dim vector = [ freq<sub>24</sub> | disc<sub>15</sub> | stats<sub>3</sub> ] &nbsp;→&nbsp; <span class="dim">∈ ℝ⁴²</span></div>
+  <div class="arrow">▼</div>
+  <div class="lbl"><b>S4 · RobustScaler</b> (p1–p99), <b>fit on normal-train windows only</b></div>
+  <div class="step" style="width:820px;background:#eef7ee;border-color:#7bbf87"><span class="tag">S5 · ENSEMBLE ANOMALY SCORE</span>
+    <div class="seq" style="text-align:center;font-size:13px">
+      A(W) = 0.7 · z(AE reconstruction error) + 0.3 · z(Isolation Forest anomaly score)
+    </div>
+    <div class="note" style="margin-top:4px">z(·): per-component RobustScale (fit on normal-train) · iForest anomaly score = −score_samples (higher = more anomalous)</div></div>
+  <div class="note">Train ↔ serve share the <b>same</b> 42-dim space · flag attack when A(W) &gt; threshold T</div>
+</div>
+</body></html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #fff; }
+  #diagram {
+    width: 1180px; padding: 30px 34px 26px; background: #fff;
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    color: #1f2733;
+  }
+  h1 { font-size: 21px; text-align: center; margin-bottom: 4px; color:#10243f; }
+  .sub { text-align:center; font-size:12.5px; color:#5b6b7d; margin-bottom:18px; }
+  .row { display:flex; justify-content:center; align-items:stretch; gap:26px; }
+  .arrow { text-align:center; color:#7a8aa0; font-size:22px; line-height:1; margin:7px 0; }
+  .box { border-radius:12px; padding:12px 14px; border:1.6px solid; text-align:center;
+         box-shadow:0 1px 2px rgba(0,0,0,.06); display:flex; flex-direction:column;
+         justify-content:center; }
+  .box .t { font-weight:700; font-size:14px; }
+  .box .d { font-size:12px; color:#3c4a5a; margin-top:3px; line-height:1.35; }
+  .box .tag { font-size:10.5px; font-weight:700; letter-spacing:.4px; color:#6b7a8c; }
+  .wide { width:760px; }
+  .col  { width:300px; }
+  .gray { background:#f3f5f8; border-color:#c3ccd6; }
+  .data { background:#eef2f7; border-color:#aebccd; }
+  .p1 { background:#e8f5ea; border-color:#5aa46a; }
+  .p2 { background:#fdf0e0; border-color:#dd9a48; }
+  .p3 { background:#fae9ea; border-color:#cf6470; }
+  .exp { background:#efe8f6; border-color:#9b73c4; }
+  .reuse { display:flex; align-items:center; justify-content:center; gap:10px;
+           font-size:11px; color:#2a8a46; font-weight:600; margin:6px 0 2px; }
+  .reuse .ln { flex:0 0 90px; border-top:2px dashed #2a8a46; height:0; }
+  .feed { display:flex; justify-content:center; gap:120px; font-size:11px; margin-top:6px; }
+  .feed b { color:#b8761b; } .feed span { color:#52627a; }
+  .note { margin-top:16px; text-align:center; font-size:12.5px; font-style:italic;
+          color:#a01b1b; background:#fff4f4; border:1.4px solid #d98a8a;
+          border-radius:9px; padding:9px 12px; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:11.5px; background:#eef1f5;
+         padding:1px 4px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="diagram">
+  <h1>Experiment pipeline — three separated phases (train · calibrate · test)</h1>
+  <div class="sub">DeSFAM-based · privilege-escalation detection via System Call · DongTing</div>
+
+  <div class="row">
+    <div class="box gray col"><div class="t">DongTing (npz)</div><div class="d">real system call IDs</div></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="row">
+    <div class="box data wide"><div class="tag">PHASE 0 · DATA</div>
+      <div class="d"><b>Sensor-alphabet filter</b> (24 security syscalls) + windowing (length 10, stride 2)</div></div>
+  </div>
+  <div class="arrow">▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼</div>
+
+  <div class="row">
+    <div class="box data col"><div class="t">TRAIN</div><div class="d">normal-train<br>50,877 windows</div></div>
+    <div class="box data col"><div class="t">CALIBRATION</div><div class="d">½ benign-val + ½ attack</div></div>
+    <div class="box data col"><div class="t">TEST <span style="color:#cf6470">(disjoint)</span></div><div class="d">½ benign-val + ½ attack</div></div>
+  </div>
+  <div class="arrow">▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼</div>
+
+  <div class="row">
+    <div class="box p1 col"><div class="tag">PHASE 1 · TRAIN</div>
+      <div class="d">Fit Scaler + dense-AE<br>+ Isolation Forest<br><b>(normal-only)</b></div></div>
+    <div class="box p2 col"><div class="tag">PHASE 2 · CALIBRATE</div>
+      <div class="d"><code>T0 / T_op / T_min</code><br>+ band edges (noise &amp; attack)</div></div>
+    <div class="box p3 col"><div class="tag">PHASE 3 · TEST</div>
+      <div class="d">Score → <b>AUC 0.848</b><br>+ TEST window scores</div></div>
+  </div>
+  <div class="reuse"><span class="ln"></span>models &amp; scaler reused (no retraining)<span class="ln"></span></div>
+
+  <div class="feed"><b>↘ thresholds + bands (from CAL)</b><span>window scores (from TEST) ↙</span></div>
+  <div class="row">
+    <div class="box exp wide"><div class="tag">EMA-EVASION EXPERIMENT (RQ2)</div>
+      <div class="d">3 threshold policies: <b>fixed</b> / <b>ema_uncond</b> / <b>ema_cond</b><br>
+      × noise intensity {none, moderate, high} × attack class {stealthy, loud} · 40 trials/cell</div></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="row">
+    <div class="box gray wide"><div class="t">RESULTS</div>
+      <div class="d">recall / evasion / <code>T_EMA(t)</code> · Kruskal · Spearman · Wilcoxon · Fig 1–2</div></div>
+  </div>
+
+  <div class="note">CALIBRATION ∩ TEST = ∅ &nbsp;→&nbsp; thresholds/bands are never fit on the windows used for evaluation (no calibration leakage)</div>
+</div>
+</body>
+</html>

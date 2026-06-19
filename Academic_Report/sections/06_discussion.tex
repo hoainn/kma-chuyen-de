@@ -1,0 +1,10 @@
+%% ===================== 6. THẢO LUẬN =====================
+\section{Thảo luận}\label{sec:discuss}
+
+Lỗ hổng đến từ \textit{cập nhật ngưỡng vô điều kiện} (cách đọc theo nghĩa đen công thức~\eqref{eq:ema}): tích hợp mọi cửa sổ, kể cả cửa sổ điểm cao, làm detector mất độ nhạy đúng vào lớp tấn công stealthy — vốn nguy hiểm và khó quan sát nhất (ví dụ container escape qua \texttt{nsenter}/\texttt{ptrace} rải mỏng). Quan trọng hơn, đối chiếu trực tiếp \textit{Algorithm 2} của DeSFAM cho thấy DeSFAM đặc tả cập nhật \textit{có điều kiện} (chỉ trên cửa sổ không bị gắn cờ) — vốn đã miễn nhiễm với lỗ hổng này. Vì vậy đóng góp của báo cáo không phải một cơ chế mới, mà là: (i) làm rõ sự \textit{thiếu nhất quán} ngay trong bài báo DeSFAM — công thức~\eqref{eq:ema} (vô điều kiện) so với Algorithm 2 (có điều kiện); và (ii) chứng minh bằng thực nghiệm rằng dạng cập nhật có điều kiện của Algorithm 2 là \textit{thiết yếu về an ninh} — một bản triển khai theo nghĩa đen công thức~\eqref{eq:ema} để lọt $74{,}2\%$ tấn công stealthy, trong khi Algorithm 2 đạt $0\%$.
+
+Hệ quả vận hành: đội ngũ SOC nên (a) cập nhật ngưỡng \textit{chỉ} trên cửa sổ không bị gắn cờ (đúng theo Algorithm 2 của DeSFAM, không theo nghĩa đen công thức~\eqref{eq:ema}); và (b) giám sát chính quỹ đạo $T_{\text{EMA}}(t)$ như một tín hiệu an ninh, vì tải lành tính bất thường có thể ``làm điếc cảm biến'' (sensor blinding).
+
+Về định vị, DeSFAM~\cite{desfam_original} báo cáo precision/recall $94\%/90\%$ và FedMon~\cite{fedmon2025} $94\%/91\%$, đều trên workload chuẩn không thù địch; cả hai chưa kiểm thử kịch bản nhiễu đối kháng, đồng thời cụ thể hoá thách thức \textit{non-IID} mà FedMon thừa nhận. Đóng góp của báo cáo không nhằm vượt các chỉ số này; việc detector tái lập đạt AUC $0{,}832$ (xấp xỉ DeSFAM-test) bảo đảm hiện tượng quan sát được không phải là tạo tác của một detector yếu.
+
+Các mối đe doạ đến tính hợp lệ (construct / circularity / internal / external) được trình bày đầy đủ trong tài liệu phương pháp luận kèm theo.

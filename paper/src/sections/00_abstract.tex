@@ -1,8 +1,0 @@
-\begin{abstract}
-Các ứng dụng được đóng gói container mang lại môi trường triển khai nhẹ và có khả năng mở rộng, nhưng vẫn tiềm ẩn các rủi ro bảo mật do dùng chung nhân hệ điều hành. Chúng tôi giới thiệu DeSFAM (Dynamic eBPF-driven Syscall Filtering and Anomaly Mitigation), một framework bảo mật thời gian thực thực thi nguyên tắc đặc quyền tối thiểu trong việc sử dụng lời gọi hệ thống (syscall) và phát hiện các bất thường về hành vi. DeSFAM tích hợp: 1)~lập hồ sơ syscall lai thông qua phân tích tĩnh và theo dõi eBPF động; 2)~SyscallAD (Phát hiện bất thường lời gọi hệ thống), một bộ phát hiện bất thường có độ trễ thấp kết hợp Bộ mã hóa biến phân tự động (VAE) và Rừng cô lập (iForest); 3)~tính điểm rủi ro theo ngữ cảnh dựa trên ánh xạ MITRE ATT\&CK và tương quan CVE; và 4)~thực thi syscall thích nghi sử dụng bản đồ eBPF và các móc LSM. Đánh giá sử dụng bộ dữ liệu DongTing và các kịch bản tấn công CVE thực tế cho thấy DeSFAM đạt được độ chính xác 94\%, độ thu hồi 90\%, độ trễ thực thi dưới mili-giây và chi phí hiệu năng dưới 1\%.
-DeSFAM chặn hiệu quả các cuộc tấn công leo thang đặc quyền, cố gắng thoát container và các cuộc tấn công tiêm syscall trong môi trường container hiện đại.
-\end{abstract}
-
-\begin{IEEEkeywords}
-Phát hiện bất thường, container đám mây, bảo mật container, giám sát eBPF, phát hiện mối đe dọa thời gian thực, lọc lời gọi hệ thống, tăng cường seccomp.
-\end{IEEEkeywords}

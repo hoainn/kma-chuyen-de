@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#d{width:1080px;padding:26px 30px 20px;background:#fff;
+  font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:20px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 16px}
+.row{display:flex;gap:16px;justify-content:center}
+.b{border-radius:10px;padding:9px 12px;border:1.6px solid;text-align:center}
+.b .t{font-weight:700;font-size:13px}.b .d{font-size:11px;color:#3c4a5a;margin-top:2px;line-height:1.35}
+.arrow{text-align:center;color:#7a8aa0;font-size:18px;margin:5px 0}
+.lbl{text-align:center;font-size:11px;color:#566;margin:2px 0}
+.cont{flex:1;background:#eef2f7;border-color:#aebccd}
+/* user-space band */
+.band{border:1.5px dashed #b6bfca;border-radius:10px;padding:9px 12px 11px;margin-top:2px}
+.bandlbl{font-size:10px;font-weight:700;letter-spacing:.5px;color:#8492a3;text-align:left;margin-bottom:6px}
+/* kernel */
+.kernel{border:2px solid #2b3a4d;border-radius:12px;background:#10243f;color:#e8eef7;padding:12px 14px;margin:0 auto}
+.kernel .kt{font-weight:700;font-size:13px;text-align:center;margin-bottom:8px;letter-spacing:.3px}
+.krow{display:flex;gap:14px;justify-content:center}
+.kbox{flex:1;background:#18304d;border:1.4px solid #46618a;border-radius:8px;padding:8px 10px;
+  text-align:center;font-size:11px;color:#cfe0f3}
+.kbox b{color:#fff}
+/* detection paradigms */
+.det{flex:1;border-radius:10px;padding:10px 12px;border:1.7px solid}
+.rule{background:#eaf2fb;border-color:#6f9bd6}
+.ml{background:#e8f5ea;border-color:#5aa46a}
+.det .h{font-weight:700;font-size:13px}.det .s{font-size:10.5px;color:#54627a;margin:1px 0 5px}
+.det .it{font-size:11px;color:#2b3a4d;line-height:1.5}
+.det .it b{color:#10243f}
+.enf{background:#fae9ea;border-color:#cf6470;width:560px}
+.note{margin-top:13px;text-align:center;font-size:11px;color:#566;font-style:italic}
+code{font-family:"SF Mono",Menlo,monospace;font-size:10.5px;background:#e7ecf2;padding:1px 4px;border-radius:4px}
+</style></head><body>
+<div id="d">
+  <h1>eBPF-based runtime security for containers</h1>
+  <div class="sub">In-kernel observation of system calls → user-space detection (rule-based vs ML)</div>
+
+  <div class="band"><div class="bandlbl">USER SPACE — workloads</div>
+    <div class="row">
+      <div class="b cont"><div class="t">Container A</div></div>
+      <div class="b cont"><div class="t">Container B</div></div>
+      <div class="b cont"><div class="t">Container C</div></div>
+    </div>
+  </div>
+  <div class="arrow">▼ &nbsp;<span style="font-size:11px;color:#566">system calls · network · file events</span>&nbsp; ▼</div>
+
+  <div class="kernel" style="width:760px">
+    <div class="kt">LINUX KERNEL</div>
+    <div class="krow">
+      <div class="kbox"><b>eBPF programs</b><br>@ tracepoints / kprobes / LSM hooks<br>(safe, low-overhead, programmable)</div>
+      <div class="kbox"><b>eBPF maps</b><br>ring buffer →<br>export events to user space</div>
+    </div>
+  </div>
+  <div class="arrow">▼ &nbsp;<span style="font-size:11px;color:#566">event stream</span>&nbsp; ▼</div>
+
+  <div class="band"><div class="bandlbl">USER SPACE — detection agent</div>
+    <div class="row">
+      <div class="det rule"><div class="h">Rule-based detection</div>
+        <div class="s">match known-bad patterns (signatures)</div>
+        <div class="it"><b>Falco</b> · <b>Tetragon</b> · <b>Tracee</b><br>+ precise on known attacks<br>− brittle to new variants</div></div>
+      <div class="det ml"><div class="h">ML-based detection</div>
+        <div class="s">flag deviation from normal (anomaly)</div>
+        <div class="it"><b>VAE + iForest</b> (DeSFAM, FedMon) · novelty (LIGHT-HIDS)<br>· sequence models (Transformer / LLM)<br>+ catches unknown &nbsp; − tuning, latency, drift</div></div>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="row"><div class="b enf"><div class="t">Alert / policy enforcement</div><div class="d">log · block · kill</div></div></div>
+
+  <div class="note">eBPF gives a single, low-overhead vantage point at the system-call boundary; the detection logic (rule vs ML) lives in user space. This report studies the ML branch — specifically DeSFAM (§2.3).</div>
+</div>
+</body></html>

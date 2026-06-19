@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#d{width:1120px;padding:26px 30px 20px;background:#fff;
+  font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:20px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 16px}
+.cols{display:flex;gap:18px}
+.panel{flex:1;border:1.6px solid;border-radius:12px;padding:12px 14px 14px}
+.pa{background:#eef5ee;border-color:#5aa46a}
+.pb{background:#eef2fb;border-color:#6f9bd6}
+.ph{font-weight:700;font-size:14px;margin-bottom:2px}
+.ps{font-size:11px;color:#54627a;margin-bottom:10px}
+.ph .tag{font-size:10.5px;color:#fff;border-radius:5px;padding:1px 6px;margin-left:4px}
+.pa .tag{background:#5aa46a}.pb .tag{background:#6f9bd6}
+/* VAE flow */
+.flow{display:flex;align-items:center;justify-content:center;gap:0;margin:2px 0 4px}
+.bx{border:1.5px solid #88a; border-radius:8px;background:#fff;text-align:center;
+   font-size:11px;padding:7px 8px;min-width:54px;line-height:1.25}
+.bx b{font-size:11.5px;color:#10243f}
+.tz{background:#dff0e3;border-color:#5aa46a}
+.lat{background:#fff7e6;border-color:#dd9a48;border-radius:30px}
+.ar{color:#7a8aa0;font-size:17px;padding:0 5px}
+.cases{margin-top:9px;border-top:1px dashed #b6c2b6;padding-top:8px}
+.case{display:flex;align-items:center;gap:8px;font-size:11px;margin:5px 0}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+.gok{background:#2ca02c}.gno{background:#d62728}
+.bar{height:9px;border-radius:5px;flex:none}
+.case .lab{font-size:10.5px;color:#3c4a5a}
+.kw{font-family:"SF Mono",Menlo,monospace;font-size:10.5px;background:#e7ecf2;padding:1px 4px;border-radius:4px}
+/* iForest svg labels */
+.iflegend{font-size:11px;color:#3c4a5a;margin-top:8px;line-height:1.5}
+.iflegend b{color:#10243f}
+.ens{margin-top:14px;border:2px solid #b9923f;background:#fdf6e9;border-radius:10px;
+  padding:10px 14px;text-align:center}
+.ens .t{font-weight:700;font-size:13px;color:#9a5a12}
+.ens code{font-family:"SF Mono",Menlo,monospace;font-size:12px;background:#f3e6cf;padding:1px 5px;border-radius:4px}
+.ens .d{font-size:11px;color:#5a4a2a;margin-top:3px}
+.note{margin-top:11px;text-align:center;font-size:11px;color:#566;font-style:italic}
+</style></head><body>
+<div id="d">
+  <h1>How the two anomaly scorers work</h1>
+  <div class="sub">Both trained on benign windows only (normal-only) — an attack window scores high under each</div>
+
+  <div class="cols">
+    <!-- VAE -->
+    <div class="panel pa">
+      <div class="ph">Variational Autoencoder (VAE) <span class="tag">weight 0.7</span></div>
+      <div class="ps">learns to reconstruct normal; large reconstruction error = anomaly</div>
+      <div class="flow">
+        <div class="bx"><b>x</b><br>window<br>(42-dim)</div><div class="ar">▶</div>
+        <div class="bx tz"><b>Encoder</b></div><div class="ar">▶</div>
+        <div class="bx lat"><b>z ~ N(μ,σ)</b><br>latent</div><div class="ar">▶</div>
+        <div class="bx tz"><b>Decoder</b></div><div class="ar">▶</div>
+        <div class="bx"><b>x̂</b><br>reconstr.</div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#3c4a5a">anomaly score = reconstruction error <span class="kw">‖x − x̂‖²</span></div>
+      <div class="cases">
+        <div class="case"><span class="dot gok"></span>
+          <span class="bar gok" style="width:34px;background:#bfe3c4"></span>
+          <span class="lab"><b>Normal window</b> → x̂ ≈ x → <b style="color:#1f6b34">error thấp</b></span></div>
+        <div class="case"><span class="dot gno"></span>
+          <span class="bar gno" style="width:150px;background:#f3b0b0"></span>
+          <span class="lab"><b>Attack window</b> → x̂ ≠ x → <b style="color:#9a3b3b">error cao</b></span></div>
+      </div>
+    </div>
+
+    <!-- Isolation Forest -->
+    <div class="panel pb">
+      <div class="ph">Isolation Forest <span class="tag">weight 0.3</span></div>
+      <div class="ps">random splits; anomalies isolated in fewer cuts = shorter path</div>
+      <svg width="100%" viewBox="0 0 470 196">
+        <!-- scatter -->
+        <rect x="6" y="6" width="220" height="184" rx="8" fill="#fff" stroke="#bcd"/>
+        <text x="116" y="22" font-size="10.5" fill="#566" text-anchor="middle">feature space + random cuts</text>
+        <!-- normal cluster -->
+        <g fill="#6f9bd6">
+          <circle cx="70" cy="120" r="4.5"/><circle cx="86" cy="135" r="4.5"/>
+          <circle cx="60" cy="142" r="4.5"/><circle cx="95" cy="118" r="4.5"/>
+          <circle cx="78" cy="150" r="4.5"/><circle cx="104" cy="138" r="4.5"/>
+          <circle cx="66" cy="132" r="4.5"/><circle cx="90" cy="150" r="4.5"/>
+        </g>
+        <!-- outlier -->
+        <circle cx="180" cy="50" r="6" fill="#d62728"/>
+        <text x="180" y="40" font-size="10" fill="#9a3b3b" text-anchor="middle" font-weight="700">outlier</text>
+        <!-- cuts isolating outlier (2 lines) -->
+        <line x1="150" y1="14" x2="150" y2="182" stroke="#dd9a48" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <line x1="150" y1="78" x2="222" y2="78" stroke="#dd9a48" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <!-- many cuts in cluster -->
+        <line x1="78" y1="108" x2="78" y2="182" stroke="#9bb6d8" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="50" y1="128" x2="116" y2="128" stroke="#9bb6d8" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="96" y1="108" x2="96" y2="182" stroke="#9bb6d8" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="50" y1="146" x2="116" y2="146" stroke="#9bb6d8" stroke-width="1" stroke-dasharray="3 3"/>
+
+        <!-- isolation trees -->
+        <text x="350" y="22" font-size="10.5" fill="#566" text-anchor="middle">isolation depth (path length)</text>
+        <!-- outlier path: shallow -->
+        <g stroke="#d62728" stroke-width="1.6" fill="none">
+          <line x1="300" y1="40" x2="280" y2="60"/><line x1="300" y1="40" x2="320" y2="60"/>
+          <line x1="320" y1="60" x2="338" y2="80"/>
+        </g>
+        <circle cx="338" cy="86" r="5" fill="#d62728"/>
+        <text x="356" y="90" font-size="10" fill="#9a3b3b" font-weight="700">2 cuts → score CAO</text>
+        <!-- normal path: deep -->
+        <g stroke="#6f9bd6" stroke-width="1.4" fill="none">
+          <line x1="300" y1="110" x2="285" y2="126"/><line x1="300" y1="110" x2="315" y2="126"/>
+          <line x1="315" y1="126" x2="303" y2="142"/><line x1="315" y1="126" x2="327" y2="142"/>
+          <line x1="327" y1="142" x2="318" y2="158"/><line x1="327" y1="142" x2="339" y2="158"/>
+          <line x1="339" y1="158" x2="345" y2="172"/>
+        </g>
+        <circle cx="345" cy="178" r="4.5" fill="#6f9bd6"/>
+        <text x="362" y="182" font-size="10" fill="#3a5b86" font-weight="700">nhiều cuts → score thấp</text>
+      </svg>
+      <div class="iflegend"><b>Ý tưởng:</b> điểm bất thường nằm tách biệt nên bị <b>cô lập</b> chỉ sau vài lát cắt ngẫu nhiên (đường đi ngắn) → điểm bất thường cao.</div>
+    </div>
+  </div>
+
+  <div class="ens">
+    <div class="t">Ensemble score &nbsp; <code>A(W) = 0.7 · z(VAE error) + 0.3 · z(IsolationForest)</code></div>
+    <div class="d">mỗi điểm thành phần được RobustScale (z) rồi hợp nhất; cảnh báo khi <b>A(W) &gt; ngưỡng T</b></div>
+  </div>
+  <div class="note">VAE nắm cấu trúc tinh vi của hành vi bình thường; Isolation Forest bền vững và rẻ — kết hợp để bù điểm yếu của nhau.</div>
+</div>
+</body></html>

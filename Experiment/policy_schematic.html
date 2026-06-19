@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#d{width:1000px;padding:24px 28px 16px;background:#fff;
+  font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:19px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 10px}
+.legend{display:flex;gap:20px;justify-content:center;font-size:12px;margin-top:6px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.ln{width:24px;border-top-width:3px;border-top-style:solid;display:inline-block}
+.note{margin-top:8px;text-align:center;font-size:11.5px;color:#566;font-style:italic}
+</style></head><body>
+<div id="d">
+  <h1>Ba chính sách ngưỡng trên cùng một dòng cửa sổ</h1>
+  <div class="sub">Xét một cửa sổ tấn công stealthy: điểm của nó cao hơn ngưỡng fixed/cond (bị bắt) nhưng thấp hơn ngưỡng ema_uncond đã bị nhiễu bơm (bị bỏ sót)</div>
+
+  <svg width="100%" viewBox="0 0 980 430">
+    <!-- phase backgrounds -->
+    <rect x="80"  y="55" width="170" height="285" fill="#f1f3f6"/>
+    <rect x="250" y="55" width="310" height="285" fill="#fdf0e0"/>
+    <rect x="560" y="55" width="360" height="285" fill="#fbeaea"/>
+    <!-- axes -->
+    <line x1="80" y1="340" x2="920" y2="340" stroke="#9aa6b4" stroke-width="1.5"/>
+    <line x1="80" y1="55"  x2="80"  y2="340" stroke="#9aa6b4" stroke-width="1.5"/>
+    <text transform="translate(40,200) rotate(-90)" font-size="12" fill="#566" text-anchor="middle">điểm bất thường / ngưỡng</text>
+    <text x="920" y="360" font-size="11.5" fill="#566" text-anchor="end">chỉ số cửa sổ (thời gian) →</text>
+    <!-- phase labels -->
+    <text x="165" y="74" font-size="12" fill="#5b6b7d" text-anchor="middle" font-weight="700">warm-up</text>
+    <text x="405" y="74" font-size="12" fill="#b8761b" text-anchor="middle" font-weight="700">noise (gây nhiễu)</text>
+    <text x="740" y="74" font-size="12" fill="#b3403f" text-anchor="middle" font-weight="700">attack (stealthy)</text>
+    <!-- phase separators -->
+    <line x1="250" y1="55" x2="250" y2="340" stroke="#c9ced6" stroke-dasharray="3 3"/>
+    <line x1="560" y1="55" x2="560" y2="340" stroke="#c9ced6" stroke-dasharray="3 3"/>
+
+    <!-- noise score dots pulling uncond up -->
+    <g fill="#d99a3f" opacity="0.85">
+      <circle cx="290" cy="232" r="4"/><circle cx="345" cy="205" r="4"/>
+      <circle cx="405" cy="186" r="4"/><circle cx="465" cy="170" r="4"/>
+      <circle cx="520" cy="150" r="4"/>
+    </g>
+
+    <!-- ema_uncond (red): flat warm, rises in noise, high in attack -->
+    <path d="M80,278 L250,278 C360,278 470,150 560,138 L920,134" fill="none" stroke="#d62728" stroke-width="3.4"/>
+    <!-- fixed (gray) -->
+    <line x1="80" y1="278" x2="920" y2="278" stroke="#7a8aa0" stroke-width="3"/>
+    <!-- ema_cond (green) just below fixed -->
+    <path d="M80,284 L560,288 L920,290" fill="none" stroke="#2ca02c" stroke-width="3"/>
+    <text x="86" y="272" font-size="11" fill="#5a6573">fixed = T_op</text>
+    <text x="86" y="304" font-size="10.5" fill="#2f7d32">ema_cond (≈ fixed, ≤ T_op)</text>
+
+    <!-- attack stealthy dots: clearly above fixed line, below red line -->
+    <g fill="#10243f">
+      <circle cx="600" cy="246" r="4.5"/><circle cx="660" cy="242" r="4.5"/>
+      <circle cx="780" cy="246" r="4.5"/><circle cx="840" cy="242" r="4.5"/>
+      <circle cx="888" cy="245" r="4.5"/>
+    </g>
+
+    <!-- representative attack window callout at x=720 -->
+    <circle cx="720" cy="244" r="7" fill="#10243f" stroke="#fff" stroke-width="1.5"/>
+    <line x1="720" y1="138" x2="720" y2="278" stroke="#555" stroke-width="1" stroke-dasharray="4 3"/>
+    <!-- evasion gap shading (dot up to uncond) -->
+    <rect x="712" y="138" width="16" height="106" fill="#d62728" opacity="0.16"/>
+    <!-- caught gap (fixed down to dot) -->
+    <text x="730" y="247" font-size="11.5" fill="#10243f">điểm cửa sổ tấn công</text>
+
+    <!-- annotations: miss (red) and catch (green) -->
+    <text x="912" y="190" font-size="12" fill="#b3403f" font-weight="700" text-anchor="end">✗ điểm &lt; ngưỡng ema_uncond → BỎ SÓT</text>
+    <text x="912" y="302" font-size="12" fill="#2f7d32" font-weight="700" text-anchor="end">✓ điểm &gt; ngưỡng fixed/cond → BẮT ĐƯỢC</text>
+  </svg>
+
+  <div class="legend">
+    <span><span class="ln" style="border-color:#7a8aa0"></span> fixed (= T_op, không đổi)</span>
+    <span><span class="ln" style="border-color:#d62728"></span> ema_uncond (vô điều kiện)</span>
+    <span><span class="ln" style="border-color:#2ca02c"></span> ema_cond (có điều kiện)</span>
+    <span><span style="width:10px;height:10px;border-radius:50%;background:#10243f;display:inline-block"></span> cửa sổ tấn công stealthy</span>
+  </div>
+  <div class="note">Nhiễu kéo ngưỡng ema_uncond (đỏ) lên cao hơn điểm tấn công → bỏ sót; fixed và ema_cond giữ ngưỡng thấp nên vẫn bắt được.</div>
+</div>
+</body></html>

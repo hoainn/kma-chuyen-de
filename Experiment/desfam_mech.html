@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff}
+#d{width:1120px;padding:28px 30px 22px;background:#fff;
+  font-family:-apple-system,"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;color:#1f2733}
+h1{font-size:20px;text-align:center;color:#10243f}
+.sub{text-align:center;font-size:12px;color:#5b6b7d;margin:3px 0 18px}
+.flow{display:flex;align-items:center;justify-content:center;gap:0}
+.b{border-radius:10px;padding:10px 11px;border:1.6px solid;text-align:center;min-height:74px;
+   display:flex;flex-direction:column;justify-content:center}
+.b .t{font-weight:700;font-size:12.5px}.b .d{font-size:10.5px;color:#3c4a5a;margin-top:2px;line-height:1.3}
+.ar{color:#7a8aa0;font-size:20px;padding:0 7px}
+.src{background:#eef2f7;border-color:#aebccd;width:120px}
+.ebpf{background:#e8f0fb;border-color:#6f9bd6;width:128px}
+.win{background:#eef2f7;border-color:#aebccd;width:120px}
+.feat{background:#eef2f7;border-color:#aebccd;width:128px}
+.ens{background:#e8f5ea;border-color:#5aa46a;width:150px}
+.score{background:#f3f5f8;border-color:#c3ccd6;width:118px}
+.dec{background:#fae9ea;border-color:#cf6470;width:130px}
+.emarow{display:flex;justify-content:center;margin-top:14px}
+.ema{background:#fdf0e0;border:2px solid #dd9a48;border-radius:10px;padding:10px 14px;text-align:center;width:560px}
+.ema .t{font-weight:700;font-size:13px;color:#9a5a12}
+.ema .d{font-size:11px;color:#5a4a2a;margin-top:3px;line-height:1.4}
+.loop{text-align:center;font-size:11px;color:#b8761b;font-weight:600;margin:6px 0 0}
+.flag{text-align:center;font-size:11px;color:#566;margin-top:10px}
+.attacknote{margin-top:12px;text-align:center;font-size:11.5px;font-style:italic;color:#a01b1b;
+  background:#fff4f4;border:1.3px solid #d98a8a;border-radius:9px;padding:8px 12px}
+code{font-family:"SF Mono",Menlo,monospace;font-size:11px;background:#eef1f5;padding:1px 4px;border-radius:4px}
+</style></head><body>
+<div id="d">
+  <h1>DeSFAM SyscallAD — runtime anomaly detection on system calls (base mechanism)</h1>
+  <div class="sub">Normal-only VAE + Isolation Forest ensemble with a dynamic EMA threshold — the cited base system this report studies</div>
+
+  <div class="flow">
+    <div class="b src"><div class="t">Pods</div><div class="d">workloads (ns demo)</div></div>
+    <div class="ar">▶</div>
+    <div class="b ebpf"><div class="t">Tetragon (eBPF)</div><div class="d">trace system calls @ kernel</div></div>
+    <div class="ar">▶</div>
+    <div class="b win"><div class="t">Sliding window</div><div class="d">length 10, stride 2</div></div>
+    <div class="ar">▶</div>
+    <div class="b feat"><div class="t">Feature vector</div><div class="d">42-dim (Ch. 4)</div></div>
+    <div class="ar">▶</div>
+    <div class="b ens"><div class="t">Ensemble</div><div class="d">VAE + Isolation Forest<br>(normal-only, 0.7/0.3)</div></div>
+    <div class="ar">▶</div>
+    <div class="b score"><div class="t">Anomaly<br>score A(W)</div></div>
+    <div class="ar">▶</div>
+    <div class="b dec"><div class="t">A(W) &gt; T ?</div><div class="d">flag / alert</div></div>
+  </div>
+
+  <div class="loop">▲ &nbsp; A(W) updates the threshold (feedback) &nbsp; ▲</div>
+  <div class="emarow">
+    <div class="ema"><div class="t">Dynamic threshold T — exponential moving average (EMA)</div>
+      <div class="d"><code>T₍ₜ₊₁₎ = max(T_min, β·T₍ₜ₎ + (1−β)·A(W))</code>, &nbsp; β = 0.9 &nbsp;·&nbsp; T₀ = p99.5 of benign scores<br>designed to suppress false positives from benign behavioral drift</div></div>
+  </div>
+
+  <div class="attacknote">This adaptive threshold is the attack surface analysed in Ch. 4–5: a noisy neighbor can inflate T so that a stealthy attack falls below it (evasion).</div>
+</div>
+</body></html>

@@ -1,126 +1,316 @@
-%==============================================================================
-% Báo cáo Chuyên đề — An toàn Thông tin (KMA)
-% "Nghiên cứu cơ chế phát hiện tấn công leo thang đặc quyền trong môi trường
-%  Multi-tenant Kubernetes dựa trên phân tích System Calls"
-%  (DeSFAM được dùng làm công trình tham chiếu cho thiết kế lõi phát hiện)
-% Học viên: Nguyễn Ngọc Hoài — CHAT4P006
-%
-% Định dạng: báo cáo học thuật một cột, tiếng Việt.
-% Biên dịch: XeLaTeX (qua Docker) — chạy ./build.sh
-%==============================================================================
-\documentclass[12pt,a4paper]{article}
+%% KMA — PP NCKH trong ATTT (Lớp CHAT4P). Biên dịch bằng Tectonic/XeLaTeX (claude-prism).
+%% Vietnamese qua fontspec (Latin Modern phủ dấu tiếng Việt). IEEEtran auto-fetch bởi Tectonic.
+\documentclass[conference,10pt]{IEEEtran}
 
-% --- Lề trang ----------------------------------------------------------------
-\usepackage[margin=2.5cm]{geometry}
-\setlength{\parskip}{0.4em}
-
-% --- Phông chữ Unicode (XeLaTeX): Latin Modern hỗ trợ dấu tiếng Việt ----------
 \usepackage{fontspec}
-\setmainfont{lmroman10}[
-  Extension      = .otf,
-  UprightFont    = *-regular,
-  BoldFont       = *-bold,
-  ItalicFont     = *-italic,
-  BoldItalicFont = *-bolditalic,
-]
-
-% --- Gói cốt lõi -------------------------------------------------------------
-\usepackage{graphicx}
 \usepackage{amsmath,amssymb}
+\usepackage{graphicx}
 \usepackage{booktabs}
-\usepackage{multirow}
 \usepackage{array}
-\usepackage{xcolor}
-\usepackage[hidelinks]{hyperref}
 \usepackage{url}
-\usepackage{listings}
-\usepackage{enumitem}
-
-% --- Nhãn tiếng Việt ---------------------------------------------------------
-\renewcommand{\abstractname}{Tóm tắt}
-\renewcommand{\figurename}{Hình}
-\renewcommand{\tablename}{Bảng}
-\renewcommand{\refname}{Tài liệu tham khảo}
-\renewcommand{\contentsname}{Mục lục}
-\renewcommand{\appendixname}{Phụ lục}
-\renewcommand{\listfigurename}{Danh mục hình vẽ}
-\renewcommand{\listtablename}{Danh mục bảng}
-
-% --- Kiểu trình bày mã lệnh --------------------------------------------------
-\definecolor{codebg}{rgb}{0.96,0.96,0.96}
-\lstset{
-  basicstyle=\ttfamily\footnotesize,
-  breaklines=true,
-  frame=single,
-  backgroundcolor=\color{codebg},
-  columns=fullflexible,
-  keepspaces=true,
-  showstringspaces=false,
-}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
 
 \begin{document}
 
-%==============================================================================
-% TRANG BÌA
-%==============================================================================
-\begin{titlepage}
-\centering
-{\large\bfseries HỌC VIỆN KỸ THUẬT MẬT MÃ}\\[2pt]
-{\large\bfseries KHOA AN TOÀN THÔNG TIN}\\[6pt]
-\rule{\textwidth}{0.8pt}\\[2.2cm]
+\title{Đánh giá đối kháng cơ chế ngưỡng động trong phát hiện tấn công leo thang đặc quyền dựa trên System Call cho môi trường Multi-tenant Kubernetes}
 
-{\Large\bfseries BÁO CÁO CHUYÊN ĐỀ}\\[6pt]
-{\large An toàn Thông tin}\\[2.4cm]
+\author{\IEEEauthorblockN{Học viên Lớp CHAT4P}
+\IEEEauthorblockA{Học viện Kỹ thuật Mật mã (KMA)\\
+Môn: Phương pháp Nghiên cứu Khoa học trong An toàn Thông tin\\
+Đề tài cơ sở: \textit{DeSFAM} — eBPF + AI phát hiện bất thường runtime container}}
 
-{\large\itshape Đề tài}\\[10pt]
-{\LARGE\bfseries Nghiên cứu cơ chế phát hiện tấn công leo thang\\[4pt]
-đặc quyền trong môi trường Multi-tenant Kubernetes\\[4pt]
-dựa trên phân tích System Calls}\\[2.6cm]
-
-\begin{tabular}{rl}
-  \textbf{Giảng viên hướng dẫn} & : TS. Vũ Thị Vân\\[5pt]
-  \textbf{Học viên thực hiện}   & : Nguyễn Ngọc Hoài --- CHAT4P006\\[5pt]
-  \textbf{Lớp}                  & : CHAT4P\\
-\end{tabular}
-
-\vfill
-{\large Hà Nội, tháng 6 năm 2026}
-\end{titlepage}
-
-%==============================================================================
-% PHẦN ĐẦU: Tóm tắt, Mục lục, Danh mục
-%==============================================================================
-\pagenumbering{roman}
+\maketitle
 
 \begin{abstract}
-\input{sections/abstract}
+Trong môi trường \textit{Multi-tenant Kubernetes}, nhiều tenant chia sẻ chung nhân (kernel) của một node, khiến tấn công leo thang đặc quyền (privilege escalation) và thoát container (container escape) trở thành rủi ro trọng yếu. Các khung phát hiện bất thường dựa trên \textit{system call} qua eBPF như DeSFAM kết hợp Variational Autoencoder và Isolation Forest, sử dụng \textit{ngưỡng động} cập nhật theo trung bình trượt mũ (EMA) để giảm báo động giả do trôi dạt hành vi lành tính. Nghiên cứu này áp dụng loại hình \textit{Applied Experimentation}: (i) tái lập một bộ phát hiện kiểu DeSFAM trên tập dữ liệu thực \textit{DongTing} và (ii) kiểm tra một giả thuyết đối kháng chưa được khảo sát trong tài liệu — rằng một tenant lân cận bơm nhiễu lành tính có thể \textit{đẩy ngưỡng EMA toàn cục lên cao}, giúp một tấn công ``lén'' né tránh phát hiện. Trên điểm bất thường thực của DongTing (AUC $0{,}848$ trên tập kiểm thử rời rạc, sau khi lọc theo bảng chữ cái cảm biến), thí nghiệm — với pipeline tách rõ ba pha \textit{huấn luyện / hiệu chỉnh / kiểm thử} (calibration và test rời rạc) — cho thấy: dưới nhiễu cường độ cao, công thức EMA \textit{như công bố} (cập nhật mọi cửa sổ) để lọt $28{,}5\%$ cửa sổ tấn công lén mà ngưỡng cố định bắt được (Wilcoxon $p\approx1{,}7\times10^{-8}$), với xu hướng suy giảm đơn điệu theo cường độ nhiễu (Spearman $\rho=-0{,}59$, $p\approx10^{-12}$). Một thay đổi nhỏ — \textit{chỉ cập nhật ngưỡng trên các cửa sổ không bị gắn cờ} — giữ ngưỡng đơn điệu không tăng và \textit{vô hiệu hoá hoàn toàn} vector né tránh (evasion $0\%$). Kết quả định lượng một điểm mù vận hành của cơ chế ngưỡng tự thích ứng và đề xuất biện pháp giảm thiểu khả thi.
 \end{abstract}
 
-\noindent\textbf{Từ khóa:} leo thang đặc quyền, multi-tenant Kubernetes, bảo mật
-container, lời gọi hệ thống, eBPF, Tetragon, phát hiện bất thường, Bộ mã hóa biến
-phân tự động (VAE), Rừng cô lập, DongTing, DeSFAM.
+\begin{IEEEkeywords}
+phát hiện xâm nhập, system call, eBPF, Kubernetes, leo thang đặc quyền, phát hiện bất thường, ngưỡng thích ứng, tấn công đối kháng
+\end{IEEEkeywords}
 
-\clearpage
-\tableofcontents
-\clearpage
-\listoffigures
-\listoftables
-\clearpage
+\section{Giới thiệu}
+Container hoá và Kubernetes (K8s) là nền tảng triển khai phần mềm hiện đại nhờ tính nhẹ và khả năng co giãn. Tuy nhiên, khác với máy ảo, các container trên cùng một node \textit{chia sẻ chung nhân Linux}; ranh giới cô lập chỉ là các nguyên thuỷ nhân (namespace, cgroup, capability, seccomp). Một thoả hiệp ở một container, qua leo thang đặc quyền hoặc khai thác lỗ hổng nhân, có thể vượt ranh giới này và lan sang tenant khác hoặc chiếm quyền node \cite{crosscontainer2023,ebpfguard2026}. Trong mô hình \textit{multi-tenant} — nơi các tenant không tin cậy lẫn nhau cùng tồn tại — đây là rủi ro hệ trọng.
 
-\pagenumbering{arabic}
+Vì mọi tương tác giữa tiến trình và nhân đều đi qua \textit{system call}, dòng nghiên cứu phát hiện xâm nhập trên máy chủ (HIDS) dựa trên chuỗi system call có lịch sử lâu dài và vẫn là tín hiệu trung tâm \cite{forrest1996sense,creech2014semantic,liu2018hids,bridges2019hostdata}. Công nghệ eBPF cho phép thu thập system call ở mức nhân với chi phí thấp và lập trình được, thúc đẩy một thế hệ công cụ an ninh runtime cho cloud-native \cite{syairozi2025ebpfcompare,safebpf2024,hu2026eids}.
 
-\input{sections/01-introduction}
-\input{sections/02-related-work}
-\input{sections/03-methodology}
-\input{sections/04-experiment-setup}
-\input{sections/05-evaluation}
-\input{sections/06-discussion}
-\input{sections/07-conclusion}
+\textbf{Cơ sở (base).} \textit{DeSFAM} \cite{desfam_original} là khung eBPF + AI phát hiện bất thường runtime cho container đám mây: lõi \textit{SyscallAD} kết hợp Variational Autoencoder (VAE) và Isolation Forest (iForest) huấn luyện \textit{chỉ trên hành vi lành tính} (normal-only), kèm \textit{ngưỡng động} cập nhật bằng trung bình trượt mũ (EMA) nhằm ``dập báo động giả do trôi dạt hành vi lành tính (benign behavioral drift)''. DeSFAM báo cáo precision $94\%$, recall $90\%$, độ trễ thực thi dưới mili-giây và chi phí dưới $1\%$. Biến thể liên hợp \textit{FedMon} \cite{fedmon2025} mở rộng sang đa cụm và đều \textit{tuyên bố} hỗ trợ môi trường multi-tenant.
+
+\textbf{Khoảng trống.} Tổng hợp tài liệu cho thấy DeSFAM và FedMon được đánh giá trên \textit{workload chuẩn} (ví dụ nginx, redis, sysbench) và \textit{chưa kiểm thử} dưới điều kiện \textit{tranh chấp tài nguyên thù địch} của một tenant lân cận. Đây là một thiếu sót thực tiễn: trong đám mây công cộng, hiện tượng ``noisy neighbor'' (hàng xóm ồn ào) là phổ biến, và một kẻ tấn công đồng trú hoàn toàn có thể \textit{chủ động} tạo ra nó. Quan trọng hơn, chính cơ chế ngưỡng \textit{tự thích ứng} — vốn được thiết kế để chịu đựng trôi dạt lành tính — lại có thể trở thành bề mặt tấn công: nếu nhiễu lành tính đẩy ngưỡng lên đủ cao, một tấn công tín hiệu thấp có thể rơi xuống dưới ngưỡng và thoát khỏi tầm phát hiện.
+
+\textbf{Câu hỏi nghiên cứu.}
+\textit{RQ1}: Bộ phát hiện bất thường system call kiểu DeSFAM phát hiện tấn công leo thang đặc quyền/thoát container trên dữ liệu thực với độ phủ, độ chính xác và AUC ra sao?
+\textit{RQ2 (trọng tâm)}: Một tenant lân cận bơm nhiễu lành tính có làm \textit{suy giảm và/hoặc giúp né tránh} bộ phát hiện bằng cách \textit{bơm ngưỡng EMA} hay không, và mức độ theo cường độ nhiễu cũng như theo loại tấn công?
+
+\textbf{Đóng góp.}
+(1) Tái lập bộ phát hiện kiểu DeSFAM và đo năng lực trên tập \textit{DongTing} thực (RQ1);
+(2) Hình thức hoá và kiểm định giả thuyết \textit{né tránh qua bơm ngưỡng EMA} — một góc đối kháng chưa có trong tài liệu — trên điểm bất thường thực;
+(3) Định lượng mức né tránh ($28{,}5\%$) và xu hướng theo cường độ nhiễu, có ý nghĩa thống kê chặt chẽ;
+(4) Đề xuất và kiểm chứng biện pháp giảm thiểu (cập nhật ngưỡng có điều kiện) vô hiệu hoá vector này.
+Phần còn lại: Mục~II nền tảng; Mục~III phương pháp luận; Mục~IV thiết lập; Mục~V kết quả; Mục~VI thảo luận; Mục~VII kết luận; Phụ lục~A tái lập.
+
+\section{Nền tảng và Công trình liên quan}
+
+\subsection{Phát hiện xâm nhập dựa trên System Call}
+Ý tưởng nền tảng \cite{forrest1996sense}: tiến trình lành tính sinh ra phân phối và chuỗi system call ổn định; lệch khỏi mô hình ``bình thường'' là dấu hiệu xâm nhập (mô hình self/non-self). Hướng này được hiện đại hoá bằng các đặc trưng ngữ nghĩa chuỗi liền và rời \cite{creech2014semantic}, và được hệ thống hoá trong các khảo sát toàn diện về HIDS dựa system call \cite{liu2018hids,bridges2019hostdata}, trong đó nêu các thách thức cốt lõi: giảm tỷ lệ báo động giả, cải thiện hiệu suất, và chịu đựng trôi dạt hành vi. \textit{DongTing} \cite{dongting2023} là tập dữ liệu quy mô lớn (18.966 chuỗi system call có nhãn, hơn 200 phiên bản nhân), được tạo từ chương trình kích hoạt lỗi (nhân bất thường) và bộ kiểm thử hồi quy (nhân bình thường); đây là dữ liệu nền của nghiên cứu này.
+
+\subsection{An ninh runtime container dựa trên eBPF}
+eBPF cho phép quan sát system call ở mức nhân an toàn và hiệu quả; SafeBPF \cite{safebpf2024} còn cách ly chính các chương trình eBPF (chi phí $0$--$7\%$). Khảo sát so sánh \cite{syairozi2025ebpfcompare} cho thấy các công cụ rule-based (Falco/Tetragon/Tracee) đạt tỷ lệ phát hiện đầy đủ trên các kịch bản đã biết (thoát container, DoS, đào tiền) với thời gian phát hiện trung bình $\sim 0{,}4$--$1{,}6$\,s, nhưng phụ thuộc danh sách luật cố định nên dễ bỏ sót biến thể mới. Theo hướng học máy: \textit{eBPF-Guard} \cite{ebpfguard2026} kết hợp giám sát đa tầng và mô hình ngôn ngữ để phát hiện thoát container; \textit{eBPF-PATROL} \cite{ebpfpatrol2025} nhận diện vượt quyền; \textit{EIDS} \cite{hu2026eids} là IDS đám mây hiệu năng cao; Kotenko \textit{và cộng sự} \cite{kotenko2025containerae} dùng autoencoder trên histogram system call; LIGHT-HIDS \cite{lighthids2025} dùng novelty detection nhẹ; và khảo sát \cite{translmidssurvey} tổng hợp mô hình chuỗi (Transformer/LLM), đồng thời nhấn mạnh rằng phát hiện \textit{trực tuyến} bằng các mô hình nặng vẫn là thách thức về độ trễ.
+
+\subsection{DeSFAM và cơ chế ngưỡng động}
+DeSFAM \cite{desfam_original} đặc trưng hoá mỗi \textit{cửa sổ trượt} system call (độ dài 15, bước 3) bằng tần suất theo nhóm chức năng, đặc trưng thời gian, và khớp mẫu lành tính; chấm điểm bằng ensemble VAE + iForest (trọng số $0{,}7/0{,}3$); và ra quyết định bằng ngưỡng động. Ngưỡng khởi tạo $T_0$ đặt tại phân vị $99{,}5$ của lỗi tái tạo VAE trên dữ liệu lành tính, rồi cập nhật theo EMA (Mục~\ref{sec:method}). FedMon \cite{fedmon2025} tự nhận hạn chế về workload \textit{non-IID} (dị thể giữa các tenant). Bảng~\ref{tab:related} định vị các công trình.
+
+\begin{table}[t]
+\caption{So sánh các hướng phát hiện trên cloud/K8s theo nguồn tín hiệu, vận hành trực tuyến và việc có kiểm thử dưới nhiễu/đối kháng.}
+\label{tab:related}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}p{1.8cm}p{1.7cm}p{1.3cm}p{1.3cm}@{}}
+\toprule
+\textbf{Công trình} & \textbf{Phương pháp} & \textbf{Trực tuyến} & \textbf{Đối kháng/nhiễu} \\
+\midrule
+DeSFAM \cite{desfam_original} & VAE+iForest, EMA & Có & \textbf{Không} \\
+FedMon \cite{fedmon2025} & VAE+iForest liên hợp & Có & Không \\
+Comparative \cite{syairozi2025ebpfcompare} & Rule (Falco/Tetragon) & Có & Không \\
+Kotenko \cite{kotenko2025containerae} & Autoencoder & Một phần & Không \\
+\textbf{Nghiên cứu này} & DeSFAM + đối kháng EMA & Có (cơ chế) & \textbf{Có} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Khoảng trống nghiên cứu.} (i) Thiếu đánh giá năng lực \textit{theo từng loại tấn công} leo thang đặc quyền trong điều kiện vận hành; (ii) chưa định lượng ảnh hưởng của \textit{nhiễu multi-tenant} (non-IID) lên độ nhạy; (iii) chưa khảo sát khả năng \textit{khai thác đối kháng} chính cơ chế ngưỡng tự thích ứng. Nghiên cứu này lấp các khoảng trống (ii) và (iii).
+
+\section{Phương pháp luận}\label{sec:method}
+
+\subsection{Loại hình nghiên cứu}
+Theo Edgar \& Manz \cite{edgarmanz2017} (Ch.~9, 11), đây là \textit{Applied Experimentation} theo lối suy diễn--giả thuyết (hypothetico-deductive): tái lập một cơ chế khoa học đã có, rồi \textit{thao tác một biến độc lập} trong môi trường kiểm soát để kiểm định giả thuyết \textit{có thể bác bỏ}. Biến độc lập là \textit{cường độ nhiễu của tenant lân cận}; cơ chế phát hiện (mô hình, đặc trưng) được giữ cố định; mọi khác biệt kết quả quy về biến độc lập (điều kiện \textit{ceteris paribus}). Lựa chọn thiết kế thực nghiệm có đối chứng (thay vì quan sát mô tả) là cần thiết để \textit{quy nhân quả}: chỉ khi so chính sách ngưỡng động với ngưỡng cố định \textit{trên cùng dữ liệu} mới có thể kết luận né tránh đến \textit{từ cơ chế ngưỡng} chứ không từ nhiễu làm méo tín hiệu.
+
+\subsection{Giả thuyết}
+\textbf{H0$_2$}: cường độ nhiễu không ảnh hưởng độ phủ, tỷ lệ báo động giả (FPR) hay giá trị ngưỡng EMA.
+\textbf{H1$_2$a}: tăng cường độ nhiễu làm \textit{giảm độ phủ} và/hoặc tăng FPR một cách đơn điệu, có ý nghĩa thống kê.
+\textbf{H1$_2$b}: nhiễu đẩy ngưỡng $T_{\text{EMA}}$ lên, khiến tấn công lén bị bỏ sót dưới EMA \textit{nhiều hơn hẳn} so với ngưỡng cố định trên cùng dữ liệu — tức né tránh \textit{do cơ chế ngưỡng}.
+
+\subsection{Cơ chế ngưỡng và ba chính sách kiểm tra}
+DeSFAM cập nhật ngưỡng sau mỗi cửa sổ $W_i$ bằng EMA:
+\begin{equation}
+T_{t+1} = \max\!\big(T_{\min},\; \beta\,T_t + (1-\beta)\,A(W_i)\big),\quad \beta=0{,}9,
+\label{eq:ema}
+\end{equation}
+với điểm ensemble $A(W_i)=0{,}7\,A_{\text{VAE}}(W_i)+0{,}3\,A_{\text{iForest}}(W_i)$; gắn cờ tấn công khi $A(W_i)>T$. Chúng tôi đánh giá \textit{ba} chính sách trên \textit{cùng} dòng điểm:
+\begin{itemize}
+\item \texttt{fixed}: $T=T_{op}$ cố định (đối chứng, không thích ứng);
+\item \texttt{ema\_uncond}: công thức \eqref{eq:ema} \textit{như công bố}, cập nhật \textit{mọi} cửa sổ. Điểm bất động $T^\ast$ tiệm cận trung bình điểm $A$; nếu nhiễu nâng trung bình điểm lành tính, $T$ leo theo — \textit{có thể bị bơm};
+\item \texttt{ema\_cond}: như \eqref{eq:ema} nhưng \textit{chỉ cập nhật trên cửa sổ không bị gắn cờ} ($A\le T$). Khi đó mỗi bước cho $T_{t+1}\le T_t$ nên $T$ \textit{đơn điệu không tăng} (chặn dưới bởi $T_{\min}$) — \textit{không thể bị bơm} lên trên $T_0$.
+\end{itemize}
+
+\subsection{Phân tích động học ngưỡng}
+Xét \texttt{ema\_uncond} và giả sử điểm $A$ dao động quanh trung bình $\bar A$. Trừ hai vế \eqref{eq:ema} cho $\bar A$ (bỏ qua sàn) thu được $T_{t+1}-\bar A = \beta\,(T_t-\bar A)$, tức $T_t \to \bar A$ theo cấp số nhân với tốc độ $\beta^{t}$. Thời gian để hoàn tất $1-e^{-1}\approx 63\%$ bước nhảy là $\tau \approx -1/\ln\beta \approx 9{,}5$ cửa sổ; đạt $90\%$ sau $\approx 22$ cửa sổ. Do đó một dòng nhiễu lành tính có trung bình điểm $\bar A_{\text{noise}} > T_{op}$ sẽ kéo ngưỡng lên $\approx \bar A_{\text{noise}}$ chỉ trong vài chục cửa sổ — đủ nhanh để hoàn tất \textit{trước} khi tấn công diễn ra. Ngược lại, với \texttt{ema\_cond}, điều kiện cập nhật $A\le T$ buộc $T_{t+1}=\beta T_t+(1-\beta)A \le T_t$, nên dãy $\{T_t\}$ không tăng và bị chặn dưới bởi $T_{\min}$; vector bơm ngưỡng là \textit{bất khả thi về mặt giải tích}. Phân tích này là cơ sở lý thuyết cho giả thuyết H1$_2$b và cho biện pháp giảm thiểu được kiểm chứng ở Mục~V.
+
+\subsection{Biến số và chỉ số}
+Bảng~\ref{tab:metrics} liệt kê biến số và định nghĩa thao tác. Đơn vị suy luận là \textit{một trial} (một dòng cửa sổ độc lập), tránh \textit{pseudoreplication} do coi các cửa sổ phụ thuộc trong một trial là độc lập.
+
+\begin{table}[t]
+\caption{Biến số và chỉ số (định nghĩa thao tác).}
+\label{tab:metrics}
+\centering
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}p{2.0cm}p{5.6cm}@{}}
+\toprule
+\textbf{Ký hiệu} & \textbf{Định nghĩa} \\
+\midrule
+IV: cường độ nhiễu & $\{$none, moderate, high$\}$ — pod đồng trú sinh tải lành tính tăng dần \\
+Nhân tố: loại tấn công & $\{$lén (stealthy), ồn (loud)$\}$ \\
+Recall & tỷ lệ cửa sổ tấn công có $A>T$ \\
+FPR & tỷ lệ cửa sổ lành tính có $A>T$ \\
+AUC-ROC/AP & năng lực phân tách benign/attack, độc lập ngưỡng \\
+$T_{\text{EMA}}(t)$ & giá trị ngưỡng động theo thời gian \\
+Né tránh (evasion) & cửa sổ tấn công bị bỏ sót dưới EMA \textit{nhưng} bị bắt dưới $T_{op}$ cố định \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Phương pháp thống kê}
+Mỗi ô $(\text{loại tấn công}\times\text{cường độ nhiễu})$ chạy 40 trial; tính một chỉ số tổng hợp mỗi trial; kiểm định ở \textit{mức trial}. Dùng bootstrap 95\% CI cho độ phủ; Kruskal--Wallis và Spearman cho xu hướng theo cường độ nhiễu (H1$_2$a); Wilcoxon ghép cặp cho so sánh \texttt{fixed} với \texttt{ema\_uncond} trên cùng dòng (H1$_2$b). Mức ý nghĩa $\alpha=0{,}05$.
+
+\section{Thiết lập thực nghiệm}
+
+\subsection{Dữ liệu}
+Sử dụng tập \textit{DongTing} \cite{dongting2023} dạng mã hoá (chuỗi ID system call theo bảng nhân 5.17): 5.105 chuỗi lành tính để huấn luyện, 656 chuỗi lành tính để định ngưỡng và đánh giá, 6.436 chuỗi tấn công để đánh giá. Đây là dữ liệu system call \textit{thực}, không phải sinh tổng hợp.
+
+\subsection{Bộ phát hiện và trích chọn đặc trưng}
+Áp dụng \textit{lọc theo bảng chữ cái cảm biến} — chỉ giữ 24 system call liên quan an ninh (\texttt{execve, clone, setuid/setgid/capset, openat, unlinkat, renameat2, mount, unshare, setns, pivot\_root, socket, connect, bind, mprotect, mmap, prctl, memfd\_create, splice, ptrace, init/finit\_module, bpf}) — \textit{trước khi} cửa sổ hoá (độ dài 10, bước 2). Nhóm này chỉ chiếm $\sim 20\%$ system call ở chuỗi lành tính và $\sim 10\%$ ở chuỗi tấn công, nhưng \textit{tập trung} tín hiệu leo thang đặc quyền/thoát container. Đặc trưng mỗi cửa sổ (42 chiều): tần suất 24 system call alphabet; \textit{hiện diện nhị phân} của 15 system call đặc quyền hiếm (chống pha loãng — một \texttt{ptrace} đơn lẻ vẫn lật bit dù bị pha loãng trong cửa sổ); và 3 thống kê (entropy, số lượng khác nhau chuẩn hoá, tần suất lớn nhất). Bộ phát hiện huấn luyện \textit{chỉ trên dữ liệu lành tính}: một autoencoder dày (thay cho VAE của DeSFAM do ràng buộc môi trường — động học EMA \textit{độc lập với loại scorer}) và Isolation Forest; điểm thành phần được RobustScale rồi hợp nhất theo trọng số $0{,}7/0{,}3$. $T_0$ = phân vị $99{,}5$ điểm lành tính.
+
+\textbf{Vì sao lọc theo bảng chữ cái cảm biến?} (i) \textit{Tập trung tín hiệu, chống pha loãng:} dấu hiệu leo thang đặc quyền nằm ở một nhóm nhỏ syscall đặc quyền, trong khi workload lành tính bị áp đảo bởi \texttt{read/write/close/futex}; đưa toàn bộ vũ trụ syscall vào làm các call đặc quyền hiếm bị pha loãng nên mô hình normal-only không tách được benign/attack — thực nghiệm xác nhận AUC tăng từ $0{,}647$ (không lọc) lên $0{,}848$ (lọc), $+0{,}20$. (ii) \textit{Đồng bộ train$\leftrightarrow$serve:} chính sách eBPF (Tetragon) khi triển khai chỉ trace đúng nhóm syscall an ninh này, nên lọc giúp không gian đặc trưng huấn luyện (DongTing) trùng với cảm biến vận hành. (iii) \textit{Chi phí thấp:} \texttt{read/write/futex} là các syscall tần suất cao nhất; loại chúng giảm mạnh khối lượng, phù hợp mục tiêu overhead $<1\%$. (iv) \textit{Bền với né tránh bằng khối lượng:} hiện diện nhị phân trên tập đặc quyền curated khiến kẻ tấn công không thể pha loãng bằng syscall lành tính.
+
+\textbf{24 syscall đã đủ chưa?} Tập 24 phủ các syscall \textit{điều phối ranh giới đặc quyền}: đổi định danh/năng lực (\texttt{setuid/setgid/capset/prctl}), thao tác namespace--mount tức thoát container (\texttt{unshare/setns/pivot\_root/mount}), tiêm/theo dõi tiến trình (\texttt{ptrace}), nạp mã nhân (\texttt{init/finit\_module, bpf}), thực thi (\texttt{execve/clone}), truy cập tệp nhạy cảm (\texttt{openat/unlinkat/renameat2}), quyền bộ nhớ (\texttt{mprotect/mmap/memfd\_create}), di chuyển dữ liệu (\texttt{splice}) và mạng (\texttt{socket/connect/bind}). Mọi kỹ thuật privesc (TA0004) và container escape đều phải đi qua ít nhất một trong các ``điểm nghẽn nhân'' này, nên 24 syscall là \textit{đủ phủ TTP} cho lớp tấn công nghiên cứu; bằng chứng định lượng là detector đạt AUC $0{,}848 \approx$ DeSFAM-test ($0{,}835$) chỉ với tập này. \textit{Giới hạn:} đây là tập curated theo định hướng an ninh (khớp chính sách Tetragon), không nhằm liệt kê đầy đủ — tấn công hoạt động hoàn toàn qua syscall ngoài tập (vd \texttt{io\_uring}, kênh data-only) sẽ vô hình; mở rộng bảng chữ cái là hướng tiếp theo (xem Mục~\ref{sec:discuss}).
+
+\subsubsection{Trích chọn đặc trưng}
+Cho cửa sổ $W=(s_1,\dots,s_L)$ ($L\le 10$, chỉ gồm syscall trong alphabet $\mathcal{A}$, $|\mathcal{A}|=24$). Đặt $c_v=|\{i: s_i=v\}|$. Vector đặc trưng $\mathbf{x}\in\mathbb{R}^{42}$ ghép ba khối (Hình~\ref{fig:fe}):
+\begin{align*}
+\text{freq}_v &= c_v/L, \quad v\in\mathcal{A} && (24)\\
+\text{disc}_d &= \mathbb{1}[c_d>0], \quad d\in\mathcal{D} && (15)\\
+H &= -\!\!\sum_{v:\text{freq}_v>0}\!\!\text{freq}_v\log_2 \text{freq}_v,\;\; \tfrac{|\{v:c_v>0\}|}{24},\;\; \tfrac{\max_v c_v}{L} && (3)
+\end{align*}
+trong đó $\mathcal{D}$ là 15 syscall đặc quyền hiếm (setuid/setgid/capset, unshare, setns, pivot\_root, mount, ptrace, init/finit\_module, bpf, memfd\_create, splice, renameat2, unlinkat). Khối \textit{disc} dùng \textit{hiện diện nhị phân} thay vì tần suất để \textit{chống pha loãng}: một \texttt{ptrace} đơn lẻ trong cửa sổ nhiều \texttt{openat} vẫn lật bit. Sau đó $\tilde{\mathbf{x}}=\mathrm{RobustScaler}_{[p1,p99]}(\mathbf{x})$ (fit \textit{chỉ} trên cửa sổ normal-train), và điểm bất thường $A(W)=0{,}7\,z(\lVert g(\tilde{\mathbf{x}})-\tilde{\mathbf{x}}\rVert^2)+0{,}3\,z(-\mathrm{iForest}(\tilde{\mathbf{x}}))$ với $g$ là autoencoder và $z$ là RobustScale từng thành phần (fit normal-train). Train và serve dùng \textit{cùng} không gian 42 chiều.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig_features.png}
+\caption{Trích chọn đặc trưng: chuỗi syscall thô $\to$ lọc sensor-alphabet $\to$ cửa sổ trượt (10/2) $\to$ vector 42 chiều [freq$_{24}$ | disc$_{15}$ | stats$_3$] $\to$ RobustScaler $\to$ điểm ensemble. (Ví dụ minh hoạ một cửa sổ.)}
+\label{fig:fe}
+\end{figure}
+
+\subsection{Mô hình kẻ tấn công và nhiễu lân cận}
+Kẻ tấn công đã có chỗ đứng trong một pod (post-exploitation) và thực hiện kỹ thuật leo thang đặc quyền/thoát container. Tấn công \textit{ồn} (loud) dùng nhiều system call đặc quyền dồn dập (điểm rất cao, $> $ phân vị $99{,}9$ lành tính); tấn công \textit{lén} (stealthy) rải mỏng (điểm chỉ vừa trên ngưỡng vận hành). \textit{Tenant lân cận} là pod đồng trú sinh tải lành tính hỗn loạn (cấp phát bộ nhớ, CPU, I/O), được mô hình hoá bằng cửa sổ lành tính \textit{thực} của DongTing lấy theo dải phân vị điểm tăng dần: none ($\le$ phân vị 50), moderate (50--90), high ($>$ phân vị 90). Điểm vận hành $T_{op}$ đặt tại phân vị $95$ điểm lành tính (FPR $\approx 5\%$); sàn EMA $T_{\min}$ = phân vị $50$.
+
+\subsection{Pipeline ba pha và giao thức thí nghiệm}
+\subsubsection{Ba pha tách biệt (đảm bảo độ tin cậy)}
+Để loại rò rỉ giữa hiệu chỉnh và đánh giá, pipeline tách thành ba pha với dữ liệu \textit{rời rạc} (Hình~\ref{fig:pipeline}): \textbf{P1 Huấn luyện} — fit scaler, autoencoder, Isolation Forest và bộ chuẩn hoá thành phần \textit{chỉ} trên cửa sổ lành tính huấn luyện; \textbf{P2 Hiệu chỉnh} — đặt ngưỡng $T_0/T_{op}/T_{\min}$ và các mốc phân vị xác định dải nhiễu/dải tấn công \textit{chỉ} trên tập hiệu chỉnh (½ benign-val + ½ attack); \textbf{P3 Kiểm thử} — chấm điểm và dựng dòng thí nghiệm trên tập kiểm thử \textit{rời rạc} (nửa còn lại). Vì $\text{CAL}\cap\text{TEST}=\varnothing$, không ngưỡng/dải nào được fit trên chính cửa sổ dùng để đánh giá.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig0_pipeline.png}
+\caption{Pipeline thực nghiệm với ba pha tách biệt (huấn luyện · hiệu chỉnh · kiểm thử). Tập hiệu chỉnh và kiểm thử rời rạc nhằm chống rò rỉ.}
+\label{fig:pipeline}
+\end{figure}
+
+\begin{table*}[t]
+\caption{Mỗi pha làm gì: đầu vào $\to$ thao tác $\to$ đầu ra.}
+\label{tab:phases}
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}p{1.6cm}p{3.6cm}p{7.6cm}p{3.0cm}@{}}
+\toprule
+\textbf{Pha} & \textbf{Đầu vào} & \textbf{Thao tác chính} & \textbf{Đầu ra} \\
+\midrule
+P0 · Data & DongTing (chuỗi syscall ID thực) & Lọc bảng chữ cái cảm biến (24 syscall) + windowing (độ dài 10, bước 2) & Tập cửa sổ: train / cal / test \\
+P1 · Train & Cửa sổ normal-train (50.877) & Featurize $\to$ fit RobustScaler, autoencoder, Isolation Forest, bộ chuẩn hoá thành phần — \textit{chỉ} trên dữ liệu lành tính & Mô hình + scaler \\
+P2 · Calibrate & Cửa sổ CAL (½ benign-val + ½ attack) đã chấm điểm & Đặt $T_0$=p99.5, $T_{op}$=p95, $T_{\min}$=p50; mốc dải nhiễu (p50/p90) và dải tấn công (p99.9) — \textit{chỉ} trên CAL & Ngưỡng + mốc dải \\
+P3 · Test & Cửa sổ TEST rời rạc (CAL$\cap$TEST=$\varnothing$) & Chấm điểm ensemble; đo AUC/AP; xuất điểm cửa sổ & Điểm TEST; AUC 0.848 \\
+Thử nghiệm & Điểm TEST + ngưỡng/dải (từ CAL) & Dựng dòng warm$\to$noise$\to$attack; chạy 3 chính sách ngưỡng $\times$ cường độ nhiễu $\times$ loại tấn công; 40 trial/ô & recall / evasion / $T_{\text{EMA}}(t)$ + kiểm định \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsubsection{Giao thức mỗi trial}
+Mỗi trial dựng một dòng cửa sổ TEST theo thứ tự thời gian: khởi động (50 cửa sổ lành tính) $\to$ nhiễu (150 cửa sổ theo cường độ) $\to$ tấn công (30 cửa sổ theo loại). Ba chính sách ngưỡng chạy trên \textit{cùng} dòng để so sánh ghép cặp; 40 trial mỗi ô. Toàn bộ pipeline (Python, scikit-learn) tái lập trong Phụ lục~\ref{sec:repro}.
+
+\section{Đánh giá}
+
+\subsection{RQ1 — Năng lực phát hiện trên DongTing}
+Bảng~\ref{tab:detector} cho thấy lọc theo bảng chữ cái cảm biến nâng AUC từ $0{,}647$ (ablation không lọc) lên $\mathbf{0{,}848}$ \textit{trên tập kiểm thử rời rạc} (ngang mức DeSFAM-test công bố $\approx0{,}835$), xác nhận tín hiệu leo thang đặc quyền tập trung ở nhóm system call đặc quyền và rằng đặc trưng hiện-diện-nhị-phân của system call hiếm là quyết định. Recall@$T_0$ thấp ($0{,}078$) là hệ quả của ngưỡng $T_0$ rất bảo thủ (phân vị $99{,}5$) và phù hợp với đặc tính recall thấp của các mô hình normal-only trên DongTing. Sự chồng lấn giữa phân phối điểm lành tính và tấn công chính là điều tạo ra một ``dải lén'' thực để khảo sát ở RQ2.
+
+\begin{table}[t]
+\caption{Chất lượng bộ phát hiện (benign-val vs attack) trên DongTing thực.}
+\label{tab:detector}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Cấu hình đặc trưng} & \textbf{AUC} & \textbf{AP} & \textbf{Recall@$T_0$} & \textbf{FPR@$T_0$} \\
+\midrule
+Không lọc (ablation, top-20 freq) & 0{,}647 & 0{,}981 & 0{,}190 & 0{,}005 \\
+\textbf{Lọc sensor-alphabet (TEST)} & \textbf{0{,}848} & 0{,}978 & 0{,}078 & 0{,}003 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Điểm vận hành và base-rate.} Vì cửa sổ lành tính áp đảo trong vận hành, một FPR nhỏ vẫn sinh nhiều cảnh báo tuyệt đối (nghịch lý base-rate); do đó nghiên cứu ưu tiên AUC/AP (độc lập ngưỡng) và đặt điểm vận hành $T_{op}$ tại phân vị $95$ điểm lành tính (FPR $\approx 5\%$) thay vì $T_0$ bảo thủ. Thí nghiệm RQ2 do đó thực hiện tại $T_{op}$ — một điểm vận hành thực tế hơn — để kết luận có giá trị triển khai.
+
+\subsection{RQ2 — Né tránh qua bơm ngưỡng EMA}
+Bảng~\ref{tab:full} trình bày độ phủ đầy đủ theo cả ba chính sách $\times$ ba cường độ nhiễu $\times$ hai loại tấn công. Ba quan sát chính:
+
+\begin{table}[t]
+\caption{Độ phủ (recall) trung bình theo chính sách ngưỡng và cường độ nhiễu (40 trial/ô). \texttt{fixed} và \texttt{ema\_cond} đạt $1{,}00$ ở mọi điều kiện.}
+\label{tab:full}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+\textbf{Loại} & \textbf{Chính sách} & \textbf{none} & \textbf{moderate} & \textbf{high} \\
+\midrule
+lén & \texttt{fixed}      & 1{,}00 & 1{,}00 & 1{,}00 \\
+lén & \texttt{ema\_uncond}& 0{,}856 & 0{,}852 & \textbf{0{,}715} \\
+lén & \texttt{ema\_cond}  & 1{,}00 & 1{,}00 & 1{,}00 \\
+\midrule
+ồn  & \texttt{fixed}      & 1{,}00 & 1{,}00 & 1{,}00 \\
+ồn  & \texttt{ema\_uncond}& 0{,}575 & 0{,}532 & 0{,}456 \\
+ồn  & \texttt{ema\_cond}  & 1{,}00 & 1{,}00 & 1{,}00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{H1$_2$a (xu hướng).} Với \texttt{ema\_uncond}, độ phủ tấn công lén giảm đơn điệu theo cường độ nhiễu ($0{,}856 \to 0{,}852 \to 0{,}715$). Kruskal--Wallis $H=54{,}0$ ($p=1{,}9\times10^{-12}$); Spearman $\rho=-0{,}59$ ($p=1{,}2\times10^{-12}$) — \textit{bác bỏ} H0$_2$. Hình~\ref{fig:recall} minh hoạ bằng box-plot.
+
+\textbf{H1$_2$b (né tránh).} Bảng~\ref{tab:rq2} (nhiễu cao, tấn công lén): ngưỡng cố định bắt $100\%$ cửa sổ; \texttt{ema\_uncond} chỉ còn $71{,}5\%$, tức \textbf{né tránh $28{,}5\%$} (Wilcoxon $p=1{,}7\times10^{-8}$), khi ngưỡng EMA bị bơm từ $T_{op}=32{,}66$ lên $\approx42$ tại thời điểm tấn công (đỉnh $\approx52$, Hình~\ref{fig:traj}). Đây là bằng chứng nhân quả: né tránh xuất hiện \textit{chỉ} dưới chính sách thích ứng.
+
+\textbf{Mức bơm ngưỡng.} Giá trị ngưỡng EMA trung bình tại thời điểm tấn công (đo từ \texttt{summary.csv}) tăng theo cường độ nhiễu cho tấn công lén: $\approx -0{,}07$ (none) $\to 2{,}44$ (moderate) $\to 42{,}5$ (high) — vượt $T_{op}=32{,}66$ ở mức cao, đúng tốc độ tiệm cận dự đoán ở Mục~III. Tương quan dương giữa cường độ nhiễu và $T_{\text{EMA}}$ trực tiếp giải thích sự suy giảm độ phủ. Với \texttt{ema\_cond}, giá trị này luôn $\le 0{,}03$ (chạm sàn), khẳng định ngưỡng không bị bơm.
+
+\textbf{Giảm thiểu.} Chính sách \texttt{ema\_cond} giữ ngưỡng đơn điệu không tăng (giảm về sàn $\approx0$, Hình~\ref{fig:traj}) và đạt \textbf{né tránh $0\%$} (recall $1{,}0$) ở \textit{mọi} điều kiện và \textit{cả hai} loại tấn công — \textit{vô hiệu hoá} vector.
+
+\textbf{Bất ổn của Eq.~\eqref{eq:ema}.} Với tấn công ồn, \texttt{ema\_uncond} để lọt $\approx 42$--$54\%$ (tăng theo nhiễu) — đáng chú ý là $\approx 42\%$ ngay cả khi không có nhiễu lân cận: điểm cực cao của \textit{chính cửa sổ tấn công} tự bơm ngưỡng (self-inflation). Điều này cho thấy công thức \textit{như công bố} bất ổn với mọi nguồn điểm cao (tự thân tấn công lẫn nhiễu lân cận); \texttt{ema\_cond} khắc phục cả trường hợp này.
+
+\begin{table}[t]
+\caption{Độ phủ và né tránh theo chính sách (nhiễu cao, tấn công lén). 40 trial; CI bootstrap 95\%.}
+\label{tab:rq2}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Chính sách} & \textbf{Recall} & \textbf{Né tránh} & \textbf{$T$ lúc tấn công} \\
+\midrule
+\texttt{fixed} & 1{,}00 & --- & 32{,}66 \\
+\texttt{ema\_uncond} (Eq.~\ref{eq:ema}) & \textbf{0{,}715} & \textbf{28{,}5\%} & 42 $\to$ 52 \\
+\texttt{ema\_cond} (giảm thiểu) & 1{,}00 & \textbf{0{,}0\%} & $\approx0{,}03$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig1_threshold.png}
+\caption{Quỹ đạo ngưỡng dưới nhiễu lân cận cường độ cao (một trial lén). \texttt{ema\_uncond} (đỏ) vọt trên $T_{op}$ khi nhiễu bắt đầu và leo mạnh khi tấn công; \texttt{ema\_cond} (xanh) giảm về sàn, không bao giờ bị bơm; \texttt{fixed} phẳng tại $T_{op}=32{,}56$.}
+\label{fig:traj}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_recall.png}
+\caption{Độ phủ tấn công lén theo cường độ nhiễu, phân theo chính sách ngưỡng. \texttt{ema\_uncond} (hồng) giảm đơn điệu; \texttt{fixed} và \texttt{ema\_cond} giữ ở $1{,}0$.}
+\label{fig:recall}
+\end{figure}
+
+\section{Thảo luận và Mối đe doạ tính hợp lệ}\label{sec:discuss}
+
+\textbf{Diễn giải.} Cơ chế ngưỡng tự thích ứng \textit{như công bố} có thể bị một tenant lân cận khai thác để hạ độ nhạy bộ phát hiện trên toàn node, tạo điểm mù đúng vào lớp tấn công \textit{lén} — vốn nguy hiểm và khó thấy nhất (ví dụ thoát container qua \texttt{nsenter}/\texttt{ptrace} rải mỏng). Đây là điều DeSFAM/FedMon chưa kiểm thử và chạm trực tiếp các giới hạn mà tác giả DeSFAM tự nhận (nhạy với tính đại diện của dữ liệu huấn luyện, ``không soi đối số''), đồng thời cụ thể hoá thách thức \textit{non-IID} mà FedMon nêu. Biện pháp giảm thiểu (cập nhật có điều kiện trên cửa sổ không bị gắn cờ) đơn giản, không thêm chi phí tính toán, và hiệu quả triệt để — là một khuyến nghị thiết kế khả thi.
+
+\textbf{Hàm ý vận hành (SOC).} Người vận hành cần ý thức rằng cơ chế tự hiệu chỉnh ngưỡng vừa giảm báo động giả vừa mở ra bề mặt tấn công ``làm điếc cảm biến'' (sensor blinding) bằng tải lành tính; nên giám sát chính quỹ đạo ngưỡng $T_{\text{EMA}}(t)$ như một tín hiệu an ninh, và cảnh báo khi ngưỡng tăng bất thường.
+
+\textbf{So sánh định lượng và định vị.} DeSFAM \cite{desfam_original} báo cáo precision/recall $94\%/90\%$ (AUC $0{,}94$), FedMon \cite{fedmon2025} $94\%/91\%$, đều trên workload chuẩn; khảo sát công cụ rule-based \cite{syairozi2025ebpfcompare} đạt tỷ lệ phát hiện đầy đủ với báo động giả $\approx 0$. Các con số này đo \textit{trong điều kiện không thù địch}. Đóng góp của nghiên cứu không nhằm vượt các chỉ số đó, mà chỉ ra rằng \textit{chính cơ chế ngưỡng động} được dùng để đạt chúng lại tạo ra một bề mặt tấn công khi có nhiễu đối kháng — một chiều đánh giá trực giao mà các công trình trên bỏ ngỏ. Việc bộ phát hiện tái lập đạt AUC $0{,}848$ (ngang DeSFAM-test) bảo đảm hiện tượng quan sát được không phải do bộ phát hiện yếu.
+
+\textbf{Mối đe doạ tính hợp lệ.}
+\textit{Construct}: autoencoder dày thay cho VAE của DeSFAM nên điểm tuyệt đối khác; tuy nhiên động học bơm-ngưỡng \textit{độc lập với loại scorer}, và khoảng cách cố-định--EMA giữ nguyên ở \textit{cả hai} mức AUC ($0{,}647$ và $0{,}848$), nên kết quả không phải tạo tác của độ mạnh detector.
+\textit{Internal}: pipeline tách ba pha với tập hiệu chỉnh và kiểm thử \textit{rời rạc} ($\text{CAL}\cap\text{TEST}=\varnothing$), nên ngưỡng/dải không bị fit trên cửa sổ đánh giá — loại bỏ rò rỉ hiệu chỉnh. Vẫn còn giả định \textit{một ngưỡng toàn cục} (đúng theo Eq.~\eqref{eq:ema}); nếu triển khai thực giữ ngưỡng theo \textit{từng container} thì hiệu ứng bị khu trú — cần xác minh ở mã nguồn vận hành. Thứ tự dòng (khởi động$\to$nhiễu$\to$tấn công) trừu tượng hoá lập lịch co-tenant thực.
+\textit{External}: DongTing là system call sinh từ kernel fuzzing, không phải TTP leo thang đặc quyền K8s trực tuyến; đây là \textit{thí nghiệm cơ chế} trên điểm thực, còn xác thực trên cụm K8s + Tetragon trực tuyến là công việc tiếp theo. Kết quả vì vậy khái quát cho \textit{lớp cơ chế ngưỡng EMA toàn cục}, không tự động cho mọi cấu hình triển khai.
+
+\section{Kết luận}
+Nghiên cứu áp dụng loại hình Applied Experimentation, với pipeline ba pha tách biệt (calibration và test rời rạc), để (i) tái lập một bộ phát hiện bất thường system call kiểu DeSFAM trên DongTing thực (AUC $0{,}848$ trên tập kiểm thử, sau khi lọc theo bảng chữ cái cảm biến) và (ii) định lượng một lỗ hổng đối kháng của cơ chế ngưỡng động: nhiễu của tenant lân cận bơm ngưỡng EMA và giúp $28{,}5\%$ tấn công lén né tránh, với xu hướng thống kê rõ rệt theo cường độ nhiễu ($\rho=-0{,}59$). Một thay đổi nhỏ — chỉ cập nhật ngưỡng trên cửa sổ không bị gắn cờ — vô hiệu hoá hoàn toàn vector này và còn chặn cả hiện tượng tự-bơm bởi chính tấn công. Hướng tiếp theo: xác thực trực tuyến trên K8s + Tetragon, khảo sát ngưỡng theo từng container, và bổ sung phân tích đối số system call để chống tấn công lén triệt để hơn.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
-\appendix
-\input{sections/08-appendix-repro}
+\appendices
+\section{Phụ lục Tái lập}\label{sec:repro}
+Toàn bộ kết quả tái lập trong $\le 15$ phút trên CPU (mã nguồn tại \texttt{Experiment/}):
+\begin{verbatim}
+cd Experiment
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+unzip -o ../DongTing_Official/npz.zip -d data/
+.venv/bin/python build_detector.py  # -> scored_windows.npz
+.venv/bin/python ema_evasion.py      # -> stats.json, figs
+\end{verbatim}
+Tham số chốt: cửa sổ $10$/bước $2$; alphabet $24$ system call; đặc trưng $42$ chiều; ensemble $\alpha=0{,}7$; $\beta=0{,}9$; $T_{op}$ = phân vị $95$, $T_{\min}$ = phân vị $50$ điểm lành tính; $40$ trial/ô. Kết quả số: \texttt{output/\{detector\_report,stats\}.json}, \texttt{trials.csv}, \texttt{summary.csv}.
 
 \end{document}

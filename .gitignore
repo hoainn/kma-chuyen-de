@@ -21,3 +21,16 @@ DeSFAM/model_backups/
 DongTing_Official/
 # Downloaded reference PDFs (copyright; keep manifest only)
 Docs/*.pdf
+
+# Experiment data + intermediate outputs (reproducible via the scripts)
+Experiment/data/
+Experiment/output/
+
+# Built PDFs — LaTeX/Markdown sources are committed; PDFs are build artifacts
+*.pdf
+
+# Outdated material set aside (~243MB: binaries + a nested git repo); do not track
+archive/
+
+# Downloaded reference PDFs are copyright (also covered by *.pdf above)
+Reference/
